@@ -1,9 +1,9 @@
 // パンノート service worker — offline app shell.
 // デプロイで中身を変えたら VERSION を上げてください（古いキャッシュが破棄されます）。
-const VERSION = 'bread-note-v1.0.1';
+const VERSION = 'bread-note-v1.0.2';
 const ASSETS = [
   './', './index.html', './styles.css',
-  './app.js', './db.js', './calc.js', './seed.js',
+  './app.js', './app.js?v=2', './db.js', './calc.js', './seed.js',
   './manifest.webmanifest',
   './icon-192.png', './icon-512.png', './apple-touch-icon.png',
 ];

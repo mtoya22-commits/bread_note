@@ -1517,6 +1517,7 @@ async function seed() {
 }
 
 async function boot() {
+  window.__breadBooted = true;
   try {
     await db.openDB();
     await loadAll();

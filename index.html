@@ -27,6 +27,25 @@
   <div id="sheet-root"></div>
   <div id="modal-root"></div>
   <div id="toast" role="status"></div>
-  <script type="module" src="app.js"></script>
+  <script>
+  // 起動チェック：app.js が動かないとき原因を画面に出す
+  (function () {
+    var errs = [];
+    window.addEventListener('error', function (e) { errs.push((e.message || 'error') + (e.filename ? ' @' + e.filename.split('/').pop() + ':' + e.lineno : '')); }, true);
+    setTimeout(function () {
+      if (window.__breadBooted) return;
+      var files = ['app.js', 'db.js', 'calc.js', 'seed.js', 'styles.css'];
+      Promise.all(files.map(function (f) {
+        return fetch(f + '?check=' + Date.now(), { cache: 'no-store' }).then(function (r) { return f + '：' + (r.ok ? 'OK' : r.status + '（見つかりません）'); }, function () { return f + '：取得失敗'; });
+      })).then(function (res) {
+        var v = document.getElementById('view');
+        v.innerHTML = '<div style="padding:24px;font-size:15px;line-height:1.7"><b>起動できませんでした</b><br>' + res.join('<br>') +
+          (errs.length ? '<br><br>エラー：<br>' + errs.join('<br>').replace(/</g, '&lt;') : '') +
+          '<br><br>ブラウザ：' + navigator.userAgent.replace(/</g, '&lt;') + '</div>';
+      });
+    }, 5000);
+  })();
+  </script>
+  <script type="module" src="app.js?v=2"></script>
 </body>
 </html>
