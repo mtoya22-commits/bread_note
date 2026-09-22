@@ -1,5 +1,5 @@
 // Initial recipes. Written in grams for readability, then normalized to baker's % (the stored truth).
-export const SEED_VERSION = 3;
+export const SEED_VERSION = 4;
 
 // ingredient helper: g = number | {target,min,max}
 const I = (id, name, g, o = {}) => ({ id, name, g, ...o });
@@ -31,7 +31,7 @@ function recipe(r) {
   const now = Date.now();
   r.variants = r.variants.map(normalizeVariant);
   return {
-    version: 1, favorite: false, status: '調整中', tags: [], changeLog: [{ version: 1, at: now, note: '初期登録' }],
+    version: 1, seedRev: 1, userEdited: false, favorite: false, status: '調整中', tags: [], changeLog: [{ version: 1, at: now, note: '初期登録' }],
     createdAt: now, updatedAt: now, defaultVariantId: r.variants[0].id,
     ...r,
   };
@@ -113,6 +113,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── ロデヴ（確定版）
     recipe({
       id: 'rodev-90',
+      seedRev: 2, // 標準版の改訂番号。上げると未編集の端末は自動更新、編集済みの端末には更新の提案が出る
       name: '高加水90%ロデヴ',
       category: '高加水',
       difficulty: 3,
@@ -291,6 +292,7 @@ export function migrateRecipes(recipes, fromVersion) {
       fresh.createdAt = old.createdAt || fresh.createdAt;
       fresh.changeLog = [...(old.changeLog || []), { version: fresh.version, at: Date.now(), note: '確定版：当日0.4%／冷蔵0.2%、追加モルトなし、水210＋15g' }];
       fresh._previous = old; // app stores this into recipeVersions
+      fresh.userEdited = false;
       recipes[i] = fresh;
       if (!changed.includes(fresh)) changed.push(fresh);
       const j = changed.findIndex((x) => x.id === 'rodev-90' && x !== fresh);
@@ -298,4 +300,12 @@ export function migrateRecipes(recipes, fromVersion) {
     }
   }
   return changed;
+}
+
+/** Did the user change this recipe after it last came from the standard (seed) version? */
+export function inferUserEdited(r) {
+  const log = r.changeLog || [];
+  let last = -1;
+  log.forEach((c, i) => { if (c.note === '初期登録' || (c.note || '').startsWith('確定版') || (c.note || '').startsWith('標準版')) last = i; });
+  return log.length - 1 > last;
 }

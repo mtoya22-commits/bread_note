@@ -481,3 +481,9 @@ textarea.next-memo { background: var(--accent-soft); border-color: transparent; 
 .bopt.dim { opacity: .45; }
 .mk-plan { margin: 10px 16px 0; display: inline-block; align-self: flex-start; background: var(--cold-soft); color: var(--cold); font-weight: 800; font-size: 13px; padding: 3px 12px; border-radius: 999px; }
 .bp-amt { color: var(--accent-2) !important; font-size: 16px; }
+
+.seed-note { background: var(--cold-soft); border: 0; }
+.seed-btns { display: flex; gap: 8px; margin-top: 10px; }
+.seed-btns .btn { flex: 1; font-size: 14px; }
+.plan-card { padding: 4px 0; }
+.pc-h { padding: 10px 14px 6px; font-weight: 800; color: var(--cold); font-size: 17px; }

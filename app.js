@@ -1,8 +1,8 @@
 import * as db from './db.js';
-import { buildSeedRecipes, SEED_VERSION, migrateRecipes } from './seed.js';
+import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '1.0.5';
+export const APP_VERSION = '1.0.6';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -348,6 +348,7 @@ function vRecipe(id) {
   </header>
   <div class="pad detail">
     ${memo ? `<div class="card next-banner"><div class="nb-h">前回からの改善点 <span class="muted small">#${memo.seq} · ${fmtDate(memo.startedAt)}${memo.rating != null ? ` · ${stars(memo.rating)}` : ''}</span></div><div class="nb-b">${esc(memo.nextMemo)}</div></div>` : ''}
+    ${(S.meta.pendingSeed || {})[r.id] ? `<div class="card seed-note"><b>新しい標準版があります</b><div class="small">このレシピは編集済みのため自動では更新していません。更新しても今の版はバージョン履歴に残ります。</div><div class="seed-btns"><button class="btn primary" data-act="seed-apply" data-r="${r.id}">標準版に更新</button><button class="btn ghost" data-act="seed-dismiss" data-r="${r.id}">今の版を使い続ける</button></div></div>` : ''}
     ${r.reviewNote ? `<div class="card review-note">⚠️ ${esc(r.reviewNote)}</div>` : ''}
     ${r.variants.length > 1 ? `<div class="seg">${r.variants.map((x) => `<button class="${x.id === v.id ? 'on' : ''}" data-act="variant" data-r="${r.id}" data-v="${x.id}">${esc(x.name)}</button>`).join('')}</div>` : ''}
 
@@ -961,6 +962,7 @@ function vRecord(id) {
     ${b.status === 'active' ? `<div class="card info tap" data-act="nav" data-href="#/make/${b.id}">製作中です。作るモードに戻る ›</div>` : ''}
     <div class="rec-tags"><span class="badge">v${snap.recipeVersion}</span>${snap.variantName !== '基本' ? `<span class="badge">${esc(snap.variantName)}</span>` : ''}${route ? `<span class="badge b-cold">${esc(route)}</span>` : ''}<span class="badge">粉${Math.round(snap.scale.flour)}g${snap.scale.mode === 'count' ? ` · ${C.fmtCount(snap.scale.count)}${esc(v.countUnit || '個')}` : ''}</span>${b.status === 'aborted' ? '<span class="badge b-warn">途中終了</span>' : ''}</div>
 
+    ${planCard(b)}
     ${section('総合評価', `<div class="stars">${starBtns}<span class="st-v">${b.rating != null ? b.rating : '-'}</span></div><div class="muted small">同じ星をもう一度タップで ½ 減</div>`)}
 
     ${section('次回メモ', `<textarea class="next-memo" rows="3" placeholder="例：次回は水＋5g／二次発酵＋10分／230℃を3分延長" data-on="rec" data-b="${b.id}" data-k="nextMemo">${esc(b.nextMemo)}</textarea><div class="muted small">次にこのレシピを開くと最上部に表示されます</div>`)}
@@ -994,6 +996,24 @@ function vRecord(id) {
       <button class="btn danger ghost" data-act="bake-del" data-b="${b.id}">この記録を削除</button>
     </div>
   </div>`;
+}
+
+function planCard(b) {
+  const snap = b.snapshot;
+  const { list } = C.flattenSteps(snap.variant.steps, b.progress.choices);
+  const coldStep = list.map((x) => x.step).find((s) => s.cold);
+  const L = coldStep ? b.progress.log[coldStep.id] || {} : {};
+  if (!snap.plan && !coldStep) return '';
+  const planAmts = Object.values(snap.amounts.rows || {}).filter((x) => x.byPlan);
+  const fmtDT = (ts) => `${fmtDate(ts)} ${fmtTime(ts)}`;
+  const rows = [
+    ...planAmts.map((x) => [x.name, C.fmtAmount(x)]),
+    ...(L.coldStart ? [['冷蔵開始', fmtDT(L.coldStart)], ['冷蔵終了', L.doneAt ? fmtDT(L.doneAt) : '冷蔵中'], ['冷蔵時間', L.doneAt ? fmtDur(L.doneAt - L.coldStart) : `${fmtDur(Date.now() - L.coldStart)}経過`]] : []),
+  ];
+  return section('発酵計画', `<div class="card plan-card">
+    <div class="pc-h">${esc(snap.plan?.icon || '')} ${esc(snap.plan?.label || routeLabel(b) || '')}</div>
+    ${rows.map(([k, v]) => `<div class="log-row"><span>${esc(k)}</span><span class="lr-v">${esc(v)}</span></div>`).join('')}
+  </div>`);
 }
 
 /* photos */
@@ -1186,6 +1206,7 @@ async function edSave() {
   await db.put('recipeVersions', { id: `${orig.id}@v${orig.version}`, recipeId: orig.id, version: orig.version, savedAt: Date.now(), data: clone(orig) });
   d.version = orig.version + 1;
   d.changeLog = [...(orig.changeLog || []), { version: d.version, at: Date.now(), note: E.note || '' }];
+  d.userEdited = true;
   if (!flourItems.some((it) => it.tentative) && !JSON.stringify(v).includes('"tentative":true')) delete d.reviewNote;
   await saveRecipe(d);
   S.ui.edit = null;
@@ -1325,7 +1346,7 @@ const A = {
     <div class="sheet-bg" data-act="close-sheet"></div>
     <div class="sheet"><div class="sheet-h"><h2>発酵の計画を選ぶ</h2><button class="icon-btn" data-act="close-sheet" aria-label="閉じる">${ICON.close}</button></div>
     <div class="sheet-b">
-      <p class="small muted">選んだ計画で材料量（イーストなど）が確定し、途中の分岐も自動で進みます。</p>
+      <p class="small muted">選んだ計画で材料量（イーストなど）が確定し、途中の分岐も自動で進みます。冷蔵の時刻は予定で、実際に「冷蔵庫に入れた」を押した時刻から計算し直します。</p>
       <div class="branch-pick">
         ${pb.options.map((o) => {
           const a = C.computeAmounts(v, sc, o.id);
@@ -1334,7 +1355,7 @@ const A = {
           return `<button class="bpick ${o.id === cur ? 'on' : ''}" data-act="start-plan" data-r="${r.id}" data-v="${v.id}" data-p="${o.id}">
             <span class="bp-e">${o.icon || ''}</span><span class="bp-l">${esc(o.label)}</span><span class="bp-s">${esc(o.sub || '')}</span>
             ${diff ? `<span class="bp-s"><b class="bp-amt">${esc(diff)}</b></span>` : ''}
-            ${cold ? (() => { const pre = v.steps.slice(0, v.steps.indexOf(pb)).reduce((m, x) => m + (x.timer?.min || 0), 0) + 10; const t0 = Date.now() + pre * 60000; return `<span class="bp-s">冷蔵庫へ 約${fmtTime(t0)}（約${fmtMin(pre)}後）→ 取り出し <b>${fmtDayTime(t0 + cold.cold.minH * 3600000)}〜${fmtDayTime(t0 + cold.cold.maxH * 3600000)}</b></span>`; })() : ''}
+            ${cold ? (() => { const pre = v.steps.slice(0, v.steps.indexOf(pb)).reduce((m, x) => m + (x.timer?.min || 0), 0) + 10; const t0 = Date.now() + pre * 60000; return `<span class="bp-s">冷蔵庫へ<b>予定</b> 約${fmtTime(t0)}（約${fmtMin(pre)}後）→ 取り出し目安 <b>${fmtDayTime(t0 + cold.cold.minH * 3600000)}〜${fmtDayTime(t0 + cold.cold.maxH * 3600000)}</b></span>`; })() : ''}
           </button>`;
         }).join('')}
       </div>
@@ -1348,6 +1369,22 @@ const A = {
     await startBake(r, v, el.dataset.p);
   },
   plan: (el) => { S.ui.plan[el.dataset.r] = el.dataset.p; rerender(); },
+  async 'seed-apply'(el) {
+    const r = recipeById(el.dataset.r);
+    const fresh = buildSeedRecipes().find((x) => x.id === r.id);
+    if (!fresh || !confirm(`「${r.name}」を標準版に更新します。今の編集版は v${r.version} として履歴に残ります。`)) return;
+    await archiveVersion(r);
+    const n = freshFromSeed(fresh, r);
+    await saveRecipe(n);
+    const p = { ...(S.meta.pendingSeed || {}) }; delete p[r.id]; await setMeta('pendingSeed', p);
+    toast(`v${n.version}（標準版）に更新しました`); rerender();
+  },
+  async 'seed-dismiss'(el) {
+    const id = el.dataset.r; const rev = (S.meta.pendingSeed || {})[id];
+    await setMeta('dismissedSeed', { ...(S.meta.dismissedSeed || {}), [id]: rev });
+    const p = { ...(S.meta.pendingSeed || {}) }; delete p[id]; await setMeta('pendingSeed', p);
+    rerender();
+  },
   async 'step-next'(el) { unlockAudio(); const b = bakeById(el.dataset.b); await stepNext(b); rerender(); window.scrollTo(0, 0); },
   async 'step-prev'(el) {
     const b = bakeById(el.dataset.b); const { fl, idx } = makeCtx(b);
@@ -1594,8 +1631,17 @@ async function seed() {
       await db.put('recipes', r);
     }
     S.recipes = await db.getAll('recipes');
+    if (S.meta.seeded < 4) {
+      // backfill: which standard revision each saved recipe is, and whether the user has edited it
+      for (const r of S.recipes) {
+        if (r.seedRev == null) r.seedRev = r.id === 'rodev-90' && C.planBranch(r.variants[0]) ? 2 : 1;
+        if (r.userEdited == null) r.userEdited = inferUserEdited(r);
+        await db.put('recipes', r);
+      }
+    }
     await setMeta('seeded', SEED_VERSION);
   }
+  await applySeedRevisions();
   // recipes added to seed.js in later app versions appear automatically (never overwrites, never re-adds deleted ones)
   const known = new Set([...(S.meta.seedIds || []), ...S.recipes.map((r) => r.id)]);
   const added = [];
@@ -1603,6 +1649,38 @@ async function seed() {
   const allSeed = buildSeedRecipes().map((r) => r.id);
   if (JSON.stringify(S.meta.seedIds) !== JSON.stringify(allSeed)) await setMeta('seedIds', [...new Set([...(S.meta.seedIds || []), ...allSeed])]);
   if (added.length) { S.recipes = await db.getAll('recipes'); setTimeout(() => toast(`新しいレシピ：${added.join('、')}`), 800); }
+}
+
+async function archiveVersion(r) {
+  await db.put('recipeVersions', { id: `${r.id}@v${r.version}`, recipeId: r.id, version: r.version, savedAt: Date.now(), data: clone(r) });
+}
+function freshFromSeed(fresh, old) {
+  fresh.favorite = old.favorite;
+  fresh.version = (old.version || 1) + 1;
+  fresh.createdAt = old.createdAt || fresh.createdAt;
+  fresh.userEdited = false;
+  fresh.changeLog = [...(old.changeLog || []), { version: fresh.version, at: Date.now(), note: `標準版に更新（rev${fresh.seedRev}）` }];
+  return fresh;
+}
+/** Newer standard versions: auto-update untouched recipes; for edited ones, only offer the update. */
+async function applySeedRevisions() {
+  const pending = { ...(S.meta.pendingSeed || {}) };
+  const updated = [];
+  for (const fresh of buildSeedRecipes()) {
+    const r = recipeById(fresh.id);
+    if (!r) continue;
+    if ((fresh.seedRev || 1) <= (r.seedRev || 1)) { delete pending[fresh.id]; continue; }
+    if (!r.userEdited) {
+      await archiveVersion(r);
+      const n = freshFromSeed(fresh, r);
+      await db.put('recipes', n); upsert(S.recipes, n);
+      updated.push(n.name); delete pending[fresh.id];
+    } else if ((S.meta.dismissedSeed || {})[fresh.id] !== fresh.seedRev) {
+      pending[fresh.id] = fresh.seedRev;
+    }
+  }
+  if (JSON.stringify(pending) !== JSON.stringify(S.meta.pendingSeed || {})) await setMeta('pendingSeed', pending);
+  if (updated.length) setTimeout(() => toast(`標準版に更新：${updated.join('、')}`), 900);
 }
 
 async function boot() {
