@@ -120,13 +120,17 @@ export function fmtCount(c) {
   return Number.isInteger(c) ? String(c) : c.toFixed(1);
 }
 
-/** Step text templates: {{count}} {{piece}} {{per:id}} {{min:id}} {{max:id}} {{g:id}} */
+/** Step text templates: {{count}} {{divide}} {{piece}} {{per:id}} {{min:id}} {{max:id}} {{g:id}} */
 export function tpl(text, amt) {
   if (!text) return '';
   return text.replace(/\{\{(\w+)(?::([\w-]+))?\}\}/g, (m, k, id) => {
     const r = id ? amt.rows[id] : null;
     switch (k) {
       case 'count': return fmtCount(amt.count);
+      case 'divide': {
+        const n = Math.max(1, Math.round(amt.count || 1));
+        return n === 1 ? '分割せず1個にまとめる' : `${n}等分（1個約${Math.round(amt.dough / n)}g）`;
+      }
       case 'piece': return amt.piece ? String(Math.round(amt.piece)) : '?';
       case 'per': return r?.perCount ? fmtPerCount(r.perCount) : m;
       case 'min': return r ? fmtNum(r.min ?? r.g, r.precision) + 'g' : m;
@@ -186,3 +190,6 @@ export function hasCold(steps) {
   eachStep(steps, (s) => { if (s.cold) f = true; });
   return f;
 }
+
+/** Whole-piece count for display (flour-mode recipes that also know their piece count). */
+export const pieces = (count) => (count == null ? null : Math.max(1, Math.round(count)));

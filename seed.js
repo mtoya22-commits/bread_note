@@ -1,5 +1,5 @@
 // Initial recipes. Written in grams for readability, then normalized to baker's % (the stored truth).
-export const SEED_VERSION = 1;
+export const SEED_VERSION = 2;
 
 // ingredient helper: g = number | {target,min,max}
 const I = (id, name, g, o = {}) => ({ id, name, g, ...o });
@@ -116,7 +116,7 @@ export function buildSeedRecipes() {
       reviewNote: '会話中の断片から再構成した仮データです。「要確認」の付いた材料・工程を実際の配合に合わせて編集してください。',
       variants: [{
         id: 'std', name: '基本',
-        scaleMode: 'flour', baseFlour: 250,
+        scaleMode: 'flour', baseFlour: 250, baseCount: 2, countUnit: '個',
         yieldLabel: '2個分',
         hb: { mode: 'none', recommendation: 'not_recommended', model: '', course: '', notes: ['HB非推奨', '使用する場合は初期混合5分のみ'] },
         bakeSummary: '250℃ 10分 → 230℃ 15分',
@@ -147,7 +147,7 @@ export function buildSeedRecipes() {
               { id: 'today', label: '今日焼く', icon: '🔥', sub: 'このまま一次発酵 → 焼成', steps: [
                 { id: 'td-ferm1', title: '一次発酵', tentative: true, body: '室温で発酵させる。',
                   ferment: { temp: '室温', cue: '1.5〜2倍・表面に気泡', min: 60, max: 90 } },
-                { id: 'td-div', title: '分割', tentative: true, body: '打ち粉をした台に出し、2等分。成形はせず、形を軽く整える。' },
+                { id: 'td-div', title: '分割', tentative: true, body: '打ち粉をした台に出し、{{divide}}。成形はせず、形を軽く整える。' },
                 { id: 'td-ferm2', title: '二次発酵', body: '布どり等で休ませる。',
                   ferment: { temp: '室温', cue: 'ひと回り大きく', min: 40, max: 60 },
                   tips: ['終盤にオーブンを250℃で予熱'] },
@@ -155,7 +155,7 @@ export function buildSeedRecipes() {
               ] },
               { id: 'cold', label: '冷蔵庫へ', icon: '❄️', sub: '8〜15時間の冷蔵発酵', steps: [
                 { id: 'cd-cold', title: '冷蔵発酵', body: '容器ごと冷蔵庫へ入れる。', cold: { minH: 8, maxH: 15 } },
-                { id: 'cd-div', title: '取り出し・分割', tentative: true, body: '冷蔵庫から出し、2等分。成形はせず、形を軽く整える。' },
+                { id: 'cd-div', title: '取り出し・分割', tentative: true, body: '冷蔵庫から出し、{{divide}}。成形はせず、形を軽く整える。' },
                 { id: 'cd-ferm2', title: '二次発酵', body: '布どり等で休ませる。',
                   ferment: { temp: '室温', cue: 'ひと回り大きく', min: 40, max: 60 },
                   tips: ['終盤にオーブンを250℃で予熱'] },
@@ -252,4 +252,24 @@ export function buildSeedRecipes() {
       ],
     }),
   ];
+}
+
+/** Non-destructive upgrades for data already saved on the device. */
+export function migrateRecipes(recipes, fromVersion) {
+  const changed = [];
+  if (fromVersion < 2) {
+    const r = recipes.find((x) => x.id === 'rodev-90');
+    const v = r?.variants.find((x) => x.id === 'std');
+    if (v) {
+      let touched = false;
+      if (v.baseCount == null) { v.baseCount = 2; v.countUnit = '個'; touched = true; }
+      const fix = (steps) => steps.forEach((s) => {
+        if (typeof s.body === 'string' && s.body.includes('2等分') && /div$/.test(s.id)) { s.body = s.body.replace('2等分', '{{divide}}'); touched = true; }
+        if (s.type === 'branch') s.options.forEach((o) => fix(o.steps));
+      });
+      fix(v.steps);
+      if (touched) changed.push(r);
+    }
+  }
+  return changed;
 }

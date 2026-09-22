@@ -1,8 +1,8 @@
 import * as db from './db.js';
-import { buildSeedRecipes, SEED_VERSION } from './seed.js';
+import { buildSeedRecipes, SEED_VERSION, migrateRecipes } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.0.2';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -328,6 +328,7 @@ function vRecipe(id) {
 
   const yieldTxt = v.scaleMode === 'count'
     ? `${C.fmtCount(sc.count)}${v.countUnit || '個'}`
+    : v.baseCount ? `${C.pieces(v.baseCount * sc.factor)}${esc(v.countUnit || '個')}分`
     : sc.factor !== 1 ? `${esc(v.yieldLabel)} ×${sc.factor.toFixed(2)}` : esc(v.yieldLabel);
 
   return `
@@ -404,7 +405,9 @@ function scalePanel(r, v, sc) {
         <div class="stepper-v"><input type="number" inputmode="decimal" value="${Math.round(sc.flour * 10) / 10}" data-on="scale-flour-in"><span>g</span></div>
         <button data-act="scale-flour" data-d="10" aria-label="10g増やす">＋</button>
       </div>
-      <div class="quick">${[0.5, 1, 1.5, 2].map((m) => `<button class="chip sm ${Math.abs(sc.factor - m) < 1e-9 ? 'on' : ''}" data-act="scale-mul" data-m="${m}">×${m}</button>`).join('')}</div>`;
+      <div class="quick">${[0.5, 1, 1.5, 2].map((m) => `<button class="chip sm ${Math.abs(sc.factor - m) < 1e-9 ? 'on' : ''}" data-act="scale-mul" data-m="${m}">×${m}</button>`).join('')}</div>
+      ${v.baseCount ? `<div class="quick">${[1, 2, 3, 4].map((n) => `<button class="chip sm ${Math.abs(sc.factor * v.baseCount - n) < 1e-9 ? 'on' : ''}" data-act="scale-mul" data-m="${n / v.baseCount}">${n}${esc(v.countUnit || '個')}</button>`).join('')}</div>
+      <div class="scale-note">分割 <b>${C.pieces(v.baseCount * sc.factor)}${esc(v.countUnit || '個')}</b>（1${esc(v.countUnit || '個')}あたり粉 約${Math.round(v.baseFlour / v.baseCount)}gが基準）</div>` : ''}`;
   }
   return `
   <div class="card scale-card">
@@ -572,7 +575,7 @@ function vMake(id) {
     <header class="mk-head">
       <button class="icon-btn" data-act="nav" data-href="#/home" aria-label="閉じる">${ICON.close}</button>
       <div class="mk-head-t"><div class="t">${esc(b.snapshot.recipeName)} <span class="muted">#${b.seq}</span></div>
-        <div class="s">${b.snapshot.variantName !== '基本' ? esc(b.snapshot.variantName) + ' · ' : ''}粉${Math.round(b.snapshot.scale.flour)}g${b.snapshot.scale.mode === 'count' ? ` · ${C.fmtCount(b.snapshot.scale.count)}${esc(v.countUnit || '個')}` : ''} · v${b.snapshot.recipeVersion}</div></div>
+        <div class="s">${b.snapshot.variantName !== '基本' ? esc(b.snapshot.variantName) + ' · ' : ''}粉${Math.round(b.snapshot.scale.flour)}g${b.snapshot.scale.mode === 'count' ? ` · ${C.fmtCount(b.snapshot.scale.count)}${esc(v.countUnit || '個')}` : v.baseCount ? ` · ${C.pieces(b.snapshot.amounts.count)}${esc(v.countUnit || '個')}` : ''} · v${b.snapshot.recipeVersion}</div></div>
       <button class="icon-btn" data-act="make-menu" data-b="${b.id}" aria-label="メニュー">${ICON.more}</button>
     </header>
     <div class="mk-prog"><div style="width:${pct}%"></div></div>
@@ -763,6 +766,8 @@ async function startBake(r, v) {
 let audioCtx = null;
 function unlockAudio() {
   try {
+    // iOS 17+: play alarms even when the ring/silent switch is on silent
+    if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback';
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
   } catch { /* ignore */ }
@@ -1075,7 +1080,7 @@ function vEdit(rid, vid) {
     ${section('分量の基準', `
       <div class="muted small">${C.SCALE_MODE_LABEL[v.scaleMode]} ／ 基準粉量は粉の合計（${Math.round(flourSum * 10) / 10}g）</div>
       <label class="fld">分量の表示${inp('var:yieldLabel', v.yieldLabel)}</label>
-      ${v.scaleMode === 'count' ? `<label class="fld">基準の個数${num('var:baseCount', v.baseCount)}</label>` : ''}
+      ${v.scaleMode === 'count' ? `<label class="fld">基準の個数${num('var:baseCount', v.baseCount)}</label>` : v.scaleMode === 'flour' ? `<label class="fld">基準の個数（分割数・任意）${num('var:baseCount', v.baseCount, 'なし')}</label>` : ''}
       ${v.scaleMode === 'panVolume' ? `<div class="ed-row g3"><label>型 幅cm${num('pan:w', v.basePan.w)}</label><label>奥cm${num('pan:d', v.basePan.d)}</label><label>高cm${num('pan:h', v.basePan.h)}</label></div>` : ''}
       <label class="fld">焼成の要約${inp('var:bakeSummary', v.bakeSummary)}</label>`)}
     ${section('材料（基準分量のgで入力 → ％に変換して保存）', ingHtml)}
@@ -1173,6 +1178,7 @@ function openSettings() {
     <div class="sheet-h"><h2>設定・バックアップ</h2><button class="icon-btn" data-act="close-sheet" aria-label="閉じる">${ICON.close}</button></div>
     <div class="sheet-b">
       ${section('表示', `<div class="seg">${[['system', 'システム'], ['light', 'ライト'], ['dark', 'ダーク']].map(([k, l]) => `<button class="${theme === k ? 'on' : ''}" data-act="theme" data-v="${k}">${l}</button>`).join('')}</div>`)}
+      ${section('アラーム音', `<p class="small">タイマー終了時に鳴ります。音量とマナースイッチを確認してください。</p><button class="btn block" data-act="sound-test">🔔 音をテスト</button>`)}
       ${section('バックアップ（JSON）', `
         <p class="small">レシピ・記録・設定をまとめて1ファイルに保存します。${S.meta.lastBackupAt ? `最終：${fmtDateY(S.meta.lastBackupAt)}` : '<b>まだ一度も保存していません。</b>'}</p>
         <label class="inline small"><input type="checkbox" id="bk-photos" checked> 写真も含める（ファイルが大きくなります）</label>
@@ -1392,6 +1398,7 @@ const A = {
     b.photoIds = b.photoIds.filter((p) => p !== el.dataset.p);
     await db.del('photos', el.dataset.p); await saveBake(b); rerender();
   },
+  'sound-test': () => { unlockAudio(); beep(); setTimeout(beep, 700); if (navigator.vibrate) navigator.vibrate(300); },
   'alarm-ok': () => ackAlarm(false),
   'alarm-next': () => ackAlarm(true),
   async theme(el) { await setMeta('theme', el.dataset.v); applyTheme(); openSettings(); },
@@ -1513,6 +1520,9 @@ async function seed() {
     for (const r of buildSeedRecipes()) await db.put('recipes', r);
     await setMeta('seeded', SEED_VERSION);
     S.recipes = await db.getAll('recipes');
+  } else if (S.meta.seeded < SEED_VERSION) {
+    for (const r of migrateRecipes(S.recipes, S.meta.seeded)) await db.put('recipes', r);
+    await setMeta('seeded', SEED_VERSION);
   }
 }
 
