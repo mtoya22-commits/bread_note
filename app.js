@@ -2,7 +2,7 @@ import * as db from './db.js';
 import { buildSeedRecipes, SEED_VERSION, migrateRecipes } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '1.0.2';
+export const APP_VERSION = '1.0.5';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -68,7 +68,7 @@ const S = {
   recipes: [], bakes: [], meta: {},
   route: { name: 'home' },
   ui: {
-    scale: {}, variant: {}, showPct: false, dtab: {},
+    scale: {}, variant: {}, plan: {}, showPct: false, dtab: {},
     filter: { q: '', cat: '', flags: new Set() },
     recFilter: '',
     edit: null,
@@ -316,7 +316,9 @@ function vRecipe(id) {
   if (!r) return `<div class="pad"><p>レシピが見つかりません</p></div>`;
   const v = variantOf(r, S.ui.variant[r.id]);
   const sc = curScale(r, v);
-  const amt = C.computeAmounts(v, sc);
+  const pb = C.planBranch(v);
+  const plan = pb ? (pb.options.some((o) => o.id === S.ui.plan[r.id]) ? S.ui.plan[r.id] : pb.options[0].id) : null;
+  const amt = C.computeAmounts(v, sc, plan);
   const tab = S.ui.dtab[r.id] || 'ing';
   const memo = lastMemoBake(r.id);
   const last = lastBake(r.id);
@@ -357,6 +359,7 @@ function vRecipe(id) {
     </div>
     <div class="sum-line">${hbBadge(v.hb)}${hasColdV ? `<span class="badge b-cold">${esc(ferm.join(' / '))}</span>` : ''}${v.bakeSummary ? `<span class="badge">${esc(v.bakeSummary)}</span>` : ''}</div>
 
+    ${pb ? `<div class="plan-h">発酵の計画 <span class="muted small">作り始めに選びます</span></div><div class="seg plan">${pb.options.map((o) => `<button class="${o.id === plan ? 'on' : ''}" data-act="plan" data-r="${r.id}" data-p="${o.id}">${o.icon || ''} ${esc(o.label)}</button>`).join('')}</div>` : ''}
     ${scalePanel(r, v, sc)}
 
     <div class="tabs3">
@@ -365,7 +368,7 @@ function vRecipe(id) {
       <button class="${tab === 'log' ? 'on' : ''}" data-act="dtab" data-r="${r.id}" data-t="log">記録${nBakes ? `<span class="cnt">${nBakes}</span>` : ''}</button>
     </div>
     <div class="tabbody">
-      ${tab === 'ing' ? ingredientsBlock(v, amt, true) : tab === 'steps' ? stepsBlock(v, amt) : logBlock(r)}
+      ${tab === 'ing' ? ingredientsBlock(v, amt, true) : tab === 'steps' ? stepsBlock(v, amt, plan) : logBlock(r)}
     </div>
   </div>
   <div class="startbar">
@@ -424,7 +427,9 @@ function ingredientsBlock(v, amt, interactive) {
     const rows = g.rows.map((r) => {
       const range = C.fmtRange(r);
       const pct = show && r.pct ? C.fmtPct(r.pct.target) : '';
-      const sub = [range && `幅 ${range}`, r.perCount && `1${esc(v.countUnit || '個')}あたり ${C.fmtPerCount(r.perCount)}`, r.note && esc(r.note)].filter(Boolean).join(' · ');
+      const pbx = C.planBranch(v);
+      const planTxt = r.byPlan && pbx ? pbx.options.map((o) => `${o.label} ${C.fmtNum(r.byPlan[o.id], r.precision)}g`).join(' ／ ') : '';
+      const sub = [planTxt, range && `幅 ${range}`, r.perCount && `1${esc(v.countUnit || '個')}あたり ${C.fmtPerCount(r.perCount)}`, r.note && esc(r.note)].filter(Boolean).join(' · ');
       return `
       <div class="ig-row">
         <div class="ig-name">${esc(r.name)}${r.tentative ? '<span class="badge b-warn">要確認</span>' : ''}${r.precision === 0.1 ? '<span class="prec" title="0.1g単位で計量">0.1</span>' : ''}</div>
@@ -456,7 +461,7 @@ function stepMetaChips(s) {
   return out.join('');
 }
 
-function stepsBlock(v, amt) {
+function stepsBlock(v, amt, plan = null) {
   let n = 0;
   const renderList = (steps, startN) => {
     let k = startN;
@@ -465,10 +470,10 @@ function stepsBlock(v, amt) {
         const base = k;
         return `
         <div class="branch">
-          <div class="branch-h">分岐：${esc(s.title)}</div>
+          <div class="branch-h">${s.atStart ? '発酵の計画で分かれる工程' : `分岐：${esc(s.title)}`}</div>
           ${s.body ? `<div class="branch-b">${esc(s.body)}</div>` : ''}
           <div class="branch-opts">
-            ${s.options.map((o) => `<div class="bopt"><div class="bopt-h"><span class="e">${o.icon || ''}</span>${esc(o.label)}</div><div class="bopt-s">${esc(o.sub || '')}</div><ol class="steps mini">${renderList(o.steps, base)}</ol></div>`).join('')}
+            ${s.options.map((o) => `<div class="bopt ${s.atStart && plan && plan !== o.id ? 'dim' : ''}"><div class="bopt-h"><span class="e">${o.icon || ''}</span>${esc(o.label)}</div><div class="bopt-s">${esc(o.sub || '')}</div><ol class="steps mini">${renderList(o.steps, base)}</ol></div>`).join('')}
           </div>
         </div>`;
       }
@@ -495,6 +500,7 @@ function useLine(u, amt) {
   const ref = typeof u === 'string' ? u : u.ref;
   const r = amt.rows[ref];
   if (!r) return '';
+  if (typeof u === 'object' && u.pctOfFlour) return `${esc(u.label || r.name)} ${C.partG(r, u.pctOfFlour, amt.flour)}`;
   if (typeof u === 'object' && u.show === 'min' && r.min != null) return `${esc(r.name)} ${C.fmtNum(r.min, r.precision)}g`;
   return `${esc(r.name)} ${esc(C.fmtAmount(r))}`;
 }
@@ -545,7 +551,7 @@ function vMake(id) {
       <div class="branch-pick">
         ${s.options.map((o) => `<button class="bpick ${b.progress.choices[s.id] === o.id ? 'on' : ''}" data-act="branch" data-b="${b.id}" data-s="${s.id}" data-o="${o.id}">
           <span class="bp-e">${o.icon || ''}</span><span class="bp-l">${esc(o.label)}</span><span class="bp-s">${esc(o.sub || '')}</span>
-          ${o.steps[0]?.cold ? `<span class="bp-s">今入れると <b>${fmtDayTime(Date.now() + o.steps[0].cold.minH * 3600000)}〜${fmtTime(Date.now() + o.steps[0].cold.maxH * 3600000)}</b></span>` : ''}
+          ${o.steps[0]?.cold ? `<span class="bp-s">今入れると <b>${fmtDayTime(Date.now() + o.steps[0].cold.minH * 3600000)}〜${fmtDayTime(Date.now() + o.steps[0].cold.maxH * 3600000)}</b></span>` : ''}
         </button>`).join('')}
       </div>`;
   } else {
@@ -553,9 +559,12 @@ function vMake(id) {
       const ref = typeof u === 'string' ? u : u.ref;
       const r = amt.rows[ref];
       if (!r) return '';
+      if (typeof u === 'object' && u.pctOfFlour) {
+        return `<div class="mk-ing"><span class="n">${esc(u.label || r.name)}</span><span class="g">${esc(C.partG(r, u.pctOfFlour, amt.flour))}</span><span class="sub">合計 ${esc(C.fmtAmount(r))} のうち</span></div>`;
+      }
       const minOnly = typeof u === 'object' && u.show === 'min' && r.min != null;
       const g = minOnly ? `${C.fmtNum(r.min, r.precision)}g` : C.fmtAmount(r);
-      const sub = minOnly ? `まず。最大${C.fmtNum(r.max, r.precision)}g` : (r.min != null || r.max != null) ? `幅 ${C.fmtRange(r)}` : '';
+      const sub = minOnly ? `まずこの量 ／ 硬ければ追加（最大${C.fmtNum(r.max, r.precision)}g）` : (r.min != null || r.max != null) ? `幅 ${C.fmtRange(r)}` : '';
       return `<div class="mk-ing"><span class="n">${esc(r.name)}${r.tentative ? ' <span class="badge b-warn">要確認</span>' : ''}</span><span class="g">${esc(g)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</div>`;
     }).join('');
     main = `
@@ -579,6 +588,7 @@ function vMake(id) {
       <button class="icon-btn" data-act="make-menu" data-b="${b.id}" aria-label="メニュー">${ICON.more}</button>
     </header>
     <div class="mk-prog"><div style="width:${pct}%"></div></div>
+    ${b.snapshot.plan ? `<div class="mk-plan">${esc(b.snapshot.plan.icon || '')} 計画：${esc(b.snapshot.plan.label)}</div>` : ''}
     <div class="mk-stepno">STEP ${idx + 1}<span> / ${fl.estTotal}${fl.unresolved ? '〜' : ''}</span><span class="wake" id="wake-ind"></span></div>
     ${otherTimers.length ? `<div class="mk-others">${otherTimers.map((t) => `<button class="ot ${t.firedAt ? 'fired' : ''}" data-act="goto-step" data-b="${b.id}" data-s="${t.stepId}">${ICON.timer}<span>${esc(t.label)}</span>${cdSpan(t)}</button>`).join('')}</div>` : ''}
     <div class="mk-main">${main}</div>
@@ -734,9 +744,11 @@ async function finishBake(b, status = 'done') {
   go(`#/record/${b.id}`);
 }
 
-async function startBake(r, v) {
+async function startBake(r, v, planId = null) {
   const sc = curScale(r, v);
-  const amt = C.computeAmounts(v, sc);
+  const pb = C.planBranch(v);
+  const planOpt = pb ? pb.options.find((o) => o.id === planId) || pb.options[0] : null;
+  const amt = C.computeAmounts(v, sc, planOpt?.id);
   const now = Date.now();
   const seq = Math.max(0, ...S.bakes.filter((b) => b.recipeId === r.id).map((b) => b.seq || 0)) + 1;
   const first = v.steps[0];
@@ -751,8 +763,9 @@ async function startBake(r, v) {
       variant: clone(v),
       scale: clone(sc),
       amounts: clone(amt),
+      plan: planOpt ? { branchId: pb.id, id: planOpt.id, label: planOpt.label, icon: planOpt.icon || '' } : null,
     },
-    progress: { currentStepId: first.id, choices: {}, log: { [first.id]: { startedAt: now } } },
+    progress: { currentStepId: first.id, choices: planOpt ? { [pb.id]: planOpt.id } : {}, log: { [first.id]: { startedAt: now } } },
     timers: [],
     env: { room: '', water: '' },
     rating: null, scores: {}, notes: '', bakeMemo: '', nextMemo: '',
@@ -1022,6 +1035,7 @@ function makeDraft(r, vid) {
   const v = variantOf(d, vid);
   for (const g of v.ingredientGroups) for (const it of g.items) {
     if (it.basis === 'flour') it._g = { target: gOf(it.pct.target, v), min: gOf(it.pct.min, v), max: gOf(it.pct.max, v) };
+    if (it.byPlan) { it._gp = {}; for (const [k, pp] of Object.entries(it.byPlan)) it._gp[k] = gOf(pp.target, v); }
   }
   return { rid: r.id, vid: v.id, d, note: '' };
 }
@@ -1042,7 +1056,9 @@ function vEdit(rid, vid) {
       ${g.items.map((it, ii) => `
         <div class="ed-item">
           <div class="ed-row">${inp(`it:${gi}:${ii}:name`, it.name, 'placeholder="材料名"')}<button class="icon-btn sm" data-act="ed-del-item" data-g="${gi}" data-i="${ii}" aria-label="削除">${ICON.close}</button></div>
-          ${it.basis === 'flour' ? `<div class="ed-row g3"><label>g${num(`it:${gi}:${ii}:gT`, it._g.target)}</label><label>最小${num(`it:${gi}:${ii}:gMin`, it._g.min, '-')}</label><label>最大${num(`it:${gi}:${ii}:gMax`, it._g.max, '-')}</label></div>
+          ${it.byPlan ? `<div class="ed-row g3">${Object.keys(it._gp).map((k) => `<label>${esc(C.planBranch(v)?.options.find((o) => o.id === k)?.label || k)} g${num(`it:${gi}:${ii}:gp_${k}`, it._gp[k])}</label>`).join('')}</div>
+            <div class="ed-row"><label class="inline">計量単位 <select data-on="ed" data-f="it:${gi}:${ii}:precision"><option value="1" ${it.precision !== 0.1 ? 'selected' : ''}>1g</option><option value="0.1" ${it.precision === 0.1 ? 'selected' : ''}>0.1g</option></select></label></div>`
+          : it.basis === 'flour' ? `<div class="ed-row g3"><label>g${num(`it:${gi}:${ii}:gT`, it._g.target)}</label><label>最小${num(`it:${gi}:${ii}:gMin`, it._g.min, '-')}</label><label>最大${num(`it:${gi}:${ii}:gMax`, it._g.max, '-')}</label></div>
             <div class="ed-row"><label class="inline">計量単位 <select data-on="ed" data-f="it:${gi}:${ii}:precision"><option value="1" ${it.precision !== 0.1 ? 'selected' : ''}>1g</option><option value="0.1" ${it.precision === 0.1 ? 'selected' : ''}>0.1g</option></select></label><label class="inline"><input type="checkbox" data-on="ed" data-f="it:${gi}:${ii}:tentative" ${it.tentative ? 'checked' : ''}>要確認</label></div>`
           : it.basis === 'perCount' ? `<div class="ed-row g3"><label>1個g${num(`it:${gi}:${ii}:pcT`, it.perCount.target)}</label><label>最小${num(`it:${gi}:${ii}:pcMin`, it.perCount.min, '-')}</label><label>最大${num(`it:${gi}:${ii}:pcMax`, it.perCount.max, '-')}</label></div>`
           : `<div class="ed-row"><label class="grow">量（文字）${inp(`it:${gi}:${ii}:text`, it.text)}</label></div>`}
@@ -1115,6 +1131,7 @@ function edSet(f, el) {
       case 'pcT': it.perCount.target = numv(val); break;
       case 'pcMin': it.perCount.min = numv(val); break;
       case 'pcMax': it.perCount.max = numv(val); break;
+      default: if (c.startsWith('gp_')) it._gp[c.slice(3)] = numv(val);
     }
   } else if (kind === 'st') {
     const s = C.findStep(v.steps, a);
@@ -1148,7 +1165,14 @@ async function edSave() {
   for (const g of v.ingredientGroups) {
     g.items = g.items.filter((it) => (it.name || '').trim());
     for (const it of g.items) {
-      if (it.basis === 'flour') {
+      if (it.byPlan) {
+        for (const [k, g] of Object.entries(it._gp)) {
+          if (g == null) { toast(`「${it.name}」の量を入力してください`); return; }
+          it.byPlan[k] = { target: (g / base) * 100 };
+        }
+        it.pct = { ...Object.values(it.byPlan)[0] };
+        delete it._gp; delete it._g;
+      } else if (it.basis === 'flour') {
         const gg = it._g;
         if (gg.target == null) { toast(`「${it.name}」のgを入力してください`); return; }
         it.pct = { target: (gg.target / base) * 100 };
@@ -1293,8 +1317,37 @@ const A = {
   async start(el) {
     unlockAudio();
     const r = recipeById(el.dataset.r); const v = variantOf(r, el.dataset.v);
-    await startBake(r, v);
+    const pb = C.planBranch(v);
+    if (!pb) { await startBake(r, v); return; }
+    const sc = curScale(r, v);
+    const cur = S.ui.plan[r.id] || pb.options[0].id;
+    $('#sheet-root').innerHTML = `
+    <div class="sheet-bg" data-act="close-sheet"></div>
+    <div class="sheet"><div class="sheet-h"><h2>発酵の計画を選ぶ</h2><button class="icon-btn" data-act="close-sheet" aria-label="閉じる">${ICON.close}</button></div>
+    <div class="sheet-b">
+      <p class="small muted">選んだ計画で材料量（イーストなど）が確定し、途中の分岐も自動で進みます。</p>
+      <div class="branch-pick">
+        ${pb.options.map((o) => {
+          const a = C.computeAmounts(v, sc, o.id);
+          const diff = Object.values(a.rows).filter((x) => x.byPlan).map((x) => `${x.name} ${C.fmtAmount(x)}`).join('、');
+          const cold = o.steps.find((x) => x.cold);
+          return `<button class="bpick ${o.id === cur ? 'on' : ''}" data-act="start-plan" data-r="${r.id}" data-v="${v.id}" data-p="${o.id}">
+            <span class="bp-e">${o.icon || ''}</span><span class="bp-l">${esc(o.label)}</span><span class="bp-s">${esc(o.sub || '')}</span>
+            ${diff ? `<span class="bp-s"><b class="bp-amt">${esc(diff)}</b></span>` : ''}
+            ${cold ? (() => { const pre = v.steps.slice(0, v.steps.indexOf(pb)).reduce((m, x) => m + (x.timer?.min || 0), 0) + 10; const t0 = Date.now() + pre * 60000; return `<span class="bp-s">冷蔵庫へ 約${fmtTime(t0)}（約${fmtMin(pre)}後）→ 取り出し <b>${fmtDayTime(t0 + cold.cold.minH * 3600000)}〜${fmtDayTime(t0 + cold.cold.maxH * 3600000)}</b></span>`; })() : ''}
+          </button>`;
+        }).join('')}
+      </div>
+    </div></div>`;
+    document.body.classList.add('sheet-open');
   },
+  async 'start-plan'(el) {
+    const r = recipeById(el.dataset.r); const v = variantOf(r, el.dataset.v);
+    S.ui.plan[r.id] = el.dataset.p;
+    closeSheet();
+    await startBake(r, v, el.dataset.p);
+  },
+  plan: (el) => { S.ui.plan[el.dataset.r] = el.dataset.p; rerender(); },
   async 'step-next'(el) { unlockAudio(); const b = bakeById(el.dataset.b); await stepNext(b); rerender(); window.scrollTo(0, 0); },
   async 'step-prev'(el) {
     const b = bakeById(el.dataset.b); const { fl, idx } = makeCtx(b);
@@ -1445,29 +1498,41 @@ const A = {
     v.steps = v.steps.filter((s) => s.id !== el.dataset.s); rerender();
   },
 };
-function withRV(fn) {
+function withRV(fn, soft = false) {
   const r = recipeById(S.route.id); const v = variantOf(r, S.ui.variant[r.id]);
-  fn(r, v, scaleKey(r, v)); rerender();
+  fn(r, v, scaleKey(r, v));
+  if (soft) softRerender(); else rerender();
 }
+// When a text field commits on blur (the user tapped a button), rebuilding the DOM immediately
+// would delete the button before its click fires. Update state now, redraw a moment later,
+// and let a pending click run first.
+let softTimer = null;
+function softRerender() { clearTimeout(softTimer); softTimer = setTimeout(() => { softTimer = null; rerender(); }, 350); }
+function cancelSoftRerender() { if (!softTimer) return false; clearTimeout(softTimer); softTimer = null; return true; }
 function bt(el) { const b = bakeById(el.dataset.b); return [b, b.timers.find((t) => t.id === el.dataset.t)]; }
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el || el.disabled) return;
   const fn = A[el.dataset.act];
-  if (fn) { e.preventDefault(); Promise.resolve(fn(el, e)).catch((err) => { console.error(err); toast('エラー: ' + err.message); }); }
+  if (!fn) return;
+  e.preventDefault();
+  const pending = cancelSoftRerender();
+  Promise.resolve(fn(el, e))
+    .then(() => { if (pending && document.contains(el)) rerender(); })
+    .catch((err) => { console.error(err); toast('エラー: ' + err.message); });
 });
 
 let recTimer = null;
 const ON = {
   'filter-q': (el, ev) => { if (ev.type !== 'input') return; S.ui.filter.q = el.value; $('.rlist').innerHTML = recipeListHtml(); hydratePhotos(); },
   'toggle-pct': (el) => { S.ui.showPct = el.checked; rerender(); },
-  'scale-flour-in': (el, ev) => { if (ev.type !== 'change') return; withRV((r, v, k) => { const f = +el.value; if (f > 0) S.ui.scale[k] = { flour: f }; }); },
+  'scale-flour-in': (el, ev) => { if (ev.type !== 'change') return; withRV((r, v, k) => { const f = +el.value; if (f > 0) S.ui.scale[k] = { flour: f }; }, true); },
   'scale-pan': (el) => withRV((r, v, k) => {
     const p = C.PAN_PRESETS.find((x) => x.id === el.value);
     S.ui.scale[k] = { pan: p ? { ...p } : { ...C.scaleFor(v, S.ui.scale[k]).pan, name: '入力した型', custom: true } };
   }),
-  'scale-dim': (el, ev) => { if (ev.type !== 'change') return; withRV((r, v, k) => { const pan = { ...C.scaleFor(v, S.ui.scale[k]).pan }; pan[el.dataset.k] = +el.value; pan.name = '入力した型'; pan.custom = true; S.ui.scale[k] = { pan }; }); },
+  'scale-dim': (el, ev) => { if (ev.type !== 'change') return; withRV((r, v, k) => { const pan = { ...C.scaleFor(v, S.ui.scale[k]).pan }; pan[el.dataset.k] = +el.value; pan.name = '入力した型'; pan.custom = true; S.ui.scale[k] = { pan }; }, true); },
   rec: (el) => {
     const b = bakeById(el.dataset.b); const k = el.dataset.k;
     if (k.startsWith('env.')) b.env[k.slice(4)] = el.value; else b[k] = el.value;
@@ -1488,7 +1553,7 @@ const ON = {
   ed: (el, ev) => {
     edSet(el.dataset.f, el);
     // refresh flour total display on change only (keeps focus while typing)
-    if (ev.type === 'change' && /:gT$/.test(el.dataset.f)) rerender();
+    if (ev.type === 'change' && /:gT$/.test(el.dataset.f)) softRerender();
   },
 };
 for (const type of ['input', 'change']) {
@@ -1521,9 +1586,23 @@ async function seed() {
     await setMeta('seeded', SEED_VERSION);
     S.recipes = await db.getAll('recipes');
   } else if (S.meta.seeded < SEED_VERSION) {
-    for (const r of migrateRecipes(S.recipes, S.meta.seeded)) await db.put('recipes', r);
+    for (const r of migrateRecipes(S.recipes, S.meta.seeded)) {
+      if (r._previous) {
+        const old = r._previous; delete r._previous;
+        await db.put('recipeVersions', { id: `${old.id}@v${old.version}`, recipeId: old.id, version: old.version, savedAt: Date.now(), data: old });
+      }
+      await db.put('recipes', r);
+    }
+    S.recipes = await db.getAll('recipes');
     await setMeta('seeded', SEED_VERSION);
   }
+  // recipes added to seed.js in later app versions appear automatically (never overwrites, never re-adds deleted ones)
+  const known = new Set([...(S.meta.seedIds || []), ...S.recipes.map((r) => r.id)]);
+  const added = [];
+  for (const r of buildSeedRecipes()) if (!known.has(r.id)) { await db.put('recipes', r); added.push(r.name); }
+  const allSeed = buildSeedRecipes().map((r) => r.id);
+  if (JSON.stringify(S.meta.seedIds) !== JSON.stringify(allSeed)) await setMeta('seedIds', [...new Set([...(S.meta.seedIds || []), ...allSeed])]);
+  if (added.length) { S.recipes = await db.getAll('recipes'); setTimeout(() => toast(`新しいレシピ：${added.join('、')}`), 800); }
 }
 
 async function boot() {

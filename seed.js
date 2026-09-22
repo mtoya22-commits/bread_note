@@ -1,5 +1,5 @@
 // Initial recipes. Written in grams for readability, then normalized to baker's % (the stored truth).
-export const SEED_VERSION = 2;
+export const SEED_VERSION = 3;
 
 // ingredient helper: g = number | {target,min,max}
 const I = (id, name, g, o = {}) => ({ id, name, g, ...o });
@@ -14,6 +14,11 @@ function normalizeVariant(v) {
         it.pct = {};
         for (const k of ['target', 'min', 'max']) if (gg[k] != null) it.pct[k] = (gg[k] / base) * 100;
         delete it.g;
+        if (it.byPlanG) {
+          it.byPlan = {};
+          for (const [k, g] of Object.entries(it.byPlanG)) it.byPlan[k] = { target: (g / base) * 100 };
+          delete it.byPlanG;
+        }
       } else if (it.perCount) it.basis = 'perCount';
       else it.basis = 'text';
       it.precision ??= 1;
@@ -34,7 +39,7 @@ function recipe(r) {
 
 const RODEV_BAKE = (p) => [
   { id: `${p}-bake1`, title: '焼成①', body: '250℃・スチームあり。', timer: { min: 10, label: '焼成① 250℃' } },
-  { id: `${p}-bake2`, title: '焼成②', body: '230℃に下げて焼く。', timer: { min: 15, label: '焼成② 230℃' } },
+  { id: `${p}-bake2`, title: '焼成②', body: '230℃に下げて焼く。焼き色を見て15〜18分。', timer: { min: 15, max: 18, label: '焼成② 230℃' } },
   { id: `${p}-cool`, title: '冷ます', body: '網の上で完全に冷ます。断面は冷めてから。' },
 ];
 
@@ -105,63 +110,67 @@ export function buildSeedRecipes() {
       }],
     }),
 
-    // ───────────────────────────── ロデヴ
+    // ───────────────────────────── ロデヴ（確定版）
     recipe({
       id: 'rodev-90',
       name: '高加水90%ロデヴ',
       category: '高加水',
       difficulty: 3,
-      tags: ['オーバーナイト', 'ハード系', 'モルト使用'],
-      description: 'リスドォル主体の高加水ロデヴ。3回目のフォールド後に「今日焼く／冷蔵庫へ」を選べる。',
-      reviewNote: '会話中の断片から再構成した仮データです。「要確認」の付いた材料・工程を実際の配合に合わせて編集してください。',
+      tags: ['オーバーナイト', 'ハード系', '当日完成'],
+      description: 'リスドォル主体の高加水ロデヴ。作り始めに「当日焼き／冷蔵発酵」を選び、イースト量だけを変える。',
       variants: [{
         id: 'std', name: '基本',
         scaleMode: 'flour', baseFlour: 250, baseCount: 2, countUnit: '個',
         yieldLabel: '2個分',
         hb: { mode: 'none', recommendation: 'not_recommended', model: '', course: '', notes: ['HB非推奨', '使用する場合は初期混合5分のみ'] },
-        bakeSummary: '250℃ 10分 → 230℃ 15分',
+        bakeSummary: '250℃スチーム 10分 → 230℃ 15〜18分',
         ingredientGroups: [
           { id: 'flour', name: '粉', kind: 'flour', items: [
             I('lys', 'リスドォル', 150), I('kitano', 'キタノカオリ', 75), I('haru', '春よ恋', 25),
           ] },
           { id: 'dough', name: 'その他', kind: 'dough', items: [
-            I('water', '水', 225, { moisture: 1 }),
+            I('water', '水', 225, { moisture: 1, note: '最初210g＋後入れ15g' }),
             I('salt', '塩', 5, { precision: 0.1 }),
-            I('yeast', 'インスタントドライイースト', 1, { precision: 0.1, tentative: true, note: '量は要確認' }),
-            I('malt', 'モルト', 0.5, { precision: 0.1, tentative: true, note: '使用有無・量は要確認' }),
+            I('yeast', 'ドライイースト', 1, { precision: 0.1, byPlanG: { today: 1.0, cold: 0.5 } }),
           ] },
         ],
         steps: [
-          { id: 'r1', title: '粉と水を混ぜる', uses: ['lys', 'kitano', 'haru', 'water'], body: '粉気がなくなるまで混ぜる。' },
+          { id: 'r1', title: '粉と水を混ぜる', uses: ['lys', 'kitano', 'haru', { ref: 'water', pctOfFlour: 84, label: '水（最初）' }],
+            body: '粉3種と水{{part:water:84}}を、粉気がなくなるまで混ぜる。残りの水はまだ入れない。' },
           { id: 'r2', title: 'オートリーズ', body: 'ラップをして休ませる。', timer: { min: 20, label: 'オートリーズ' } },
-          { id: 'r3', title: 'イースト・塩を加える', uses: ['yeast', 'salt', 'malt'], tentative: true,
-            body: '生地に加えて、全体に行き渡るまでしっかり混ぜ込む。' },
+          { id: 'r3', title: 'イースト・塩・残りの水を加える', uses: ['yeast', 'salt', { ref: 'water', pctOfFlour: 6, label: '残りの水' }],
+            body: 'イーストと塩を加え、残りの水{{part:water:6}}を少しずつ揉み込むように加えて、全体がなじむまで混ぜる。' },
           { id: 'r4', title: '休ませ①', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ①' } },
           { id: 'r5', title: '1回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
           { id: 'r6', title: '休ませ②', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ②' } },
           { id: 'r7', title: '2回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
           { id: 'r8', title: '休ませ③', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ③' } },
           { id: 'r9', title: '3回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
-          { id: 'route', type: 'branch', title: '今日焼く？ 冷蔵庫へ？', body: '3回目のフォールド完了。ここからルートを選びます。',
+          { id: 'route', type: 'branch', atStart: true, title: '発酵の計画', body: '作り始める時に選びます。イースト量がこの選択で決まります。',
             options: [
-              { id: 'today', label: '今日焼く', icon: '🔥', sub: 'このまま一次発酵 → 焼成', steps: [
-                { id: 'td-ferm1', title: '一次発酵', tentative: true, body: '室温で発酵させる。',
-                  ferment: { temp: '室温', cue: '1.5〜2倍・表面に気泡', min: 60, max: 90 } },
-                { id: 'td-div', title: '分割', tentative: true, body: '打ち粉をした台に出し、{{divide}}。成形はせず、形を軽く整える。' },
-                { id: 'td-ferm2', title: '二次発酵', body: '布どり等で休ませる。',
-                  ferment: { temp: '室温', cue: 'ひと回り大きく', min: 40, max: 60 },
-                  tips: ['終盤にオーブンを250℃で予熱'] },
+              { id: 'today', label: '当日焼き', icon: '🔥', sub: 'イースト0.4%・室温で一次発酵 → 当日焼成', steps: [
+                { id: 'td-ferm1', title: '一次発酵', body: '室温で発酵させる。',
+                  ferment: { temp: '室温', cue: '1.5倍前後・表面に気泡が見える' } },
+                { id: 'td-div', title: '分割', body: '打ち粉をした台に出し、{{divide}}。成形はせず、形を軽く整える。' },
+                { id: 'td-ferm2', title: '最終発酵', body: '布どり等で休ませる。時間より生地の状態を優先する。',
+                  ferment: { temp: '室温', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 60 },
+                  tips: ['終盤にオーブンを250℃で予熱（スチームの準備も）'] },
                 ...RODEV_BAKE('td'),
               ] },
-              { id: 'cold', label: '冷蔵庫へ', icon: '❄️', sub: '8〜15時間の冷蔵発酵', steps: [
-                { id: 'cd-cold', title: '冷蔵発酵', body: '容器ごと冷蔵庫へ入れる。', cold: { minH: 8, maxH: 15 } },
-                { id: 'cd-div', title: '取り出し・分割', tentative: true, body: '冷蔵庫から出し、{{divide}}。成形はせず、形を軽く整える。' },
-                { id: 'cd-ferm2', title: '二次発酵', body: '布どり等で休ませる。',
-                  ferment: { temp: '室温', cue: 'ひと回り大きく', min: 40, max: 60 },
-                  tips: ['終盤にオーブンを250℃で予熱'] },
+              { id: 'cold', label: '冷蔵発酵', icon: '❄️', sub: 'イースト0.2%・冷蔵4〜5℃で8〜15時間 → 翌日焼成', steps: [
+                { id: 'cd-cold', title: '冷蔵発酵', body: '3回目のフォールド後、容器ごと冷蔵庫（4〜5℃想定）へ入れる。', cold: { minH: 8, maxH: 15 } },
+                { id: 'cd-div', title: '取り出し・分割', body: '冷蔵庫から出し、{{divide}}。成形はせず、形を軽く整える。' },
+                { id: 'cd-ferm2', title: '復温・最終発酵', body: '布どり等で休ませ、復温を兼ねて最終発酵させる。時間より生地の状態を優先する。',
+                  ferment: { temp: '室温', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 60 },
+                  tips: ['終盤にオーブンを250℃で予熱（スチームの準備も）'] },
                 ...RODEV_BAKE('cd'),
               ] },
             ] },
+        ],
+        tips: [
+          '水は最初210g＋後入れ15g（グルテンを作ってから加水）',
+          '追加モルトは使わない（リスドォルに麦芽入り）。焼き色・発酵が弱いと感じたときだけ0.1g程度を試す',
+          '最終発酵は時間より「ひと回り膨らみ、ガスが保たれていること」を優先',
         ],
       }],
     }),
@@ -269,6 +278,23 @@ export function migrateRecipes(recipes, fromVersion) {
       });
       fix(v.steps);
       if (touched) changed.push(r);
+    }
+  }
+  if (fromVersion < 3) {
+    // ロデヴ確定版：作り始めに当日／冷蔵を選び、イースト量を切り替える。追加モルトなし。
+    const i = recipes.findIndex((x) => x.id === 'rodev-90');
+    if (i >= 0) {
+      const old = recipes[i];
+      const fresh = buildSeedRecipes().find((x) => x.id === 'rodev-90');
+      fresh.favorite = old.favorite;
+      fresh.version = (old.version || 1) + 1;
+      fresh.createdAt = old.createdAt || fresh.createdAt;
+      fresh.changeLog = [...(old.changeLog || []), { version: fresh.version, at: Date.now(), note: '確定版：当日0.4%／冷蔵0.2%、追加モルトなし、水210＋15g' }];
+      fresh._previous = old; // app stores this into recipeVersions
+      recipes[i] = fresh;
+      if (!changed.includes(fresh)) changed.push(fresh);
+      const j = changed.findIndex((x) => x.id === 'rodev-90' && x !== fresh);
+      if (j >= 0) changed.splice(j, 1);
     }
   }
   return changed;

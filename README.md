@@ -13,11 +13,11 @@
 | ファイル | 役割 |
 |---|---|
 | `index.html` / `styles.css` | 画面の枠とデザイン |
-| `js/app.js` | 画面・作るモード・タイマー・記録・編集・バックアップ |
-| `js/calc.js` | ベーカーズ％ → g 計算、スケーリング、工程の分岐展開 |
-| `js/seed.js` | 初期レシピ3件 |
-| `js/db.js` | IndexedDB |
-| `sw.js` / `manifest.webmanifest` / `icons/` | PWA |
+| `app.js` | 画面・作るモード・タイマー・記録・編集・バックアップ |
+| `calc.js` | ベーカーズ％ → g 計算、スケーリング、工程の分岐展開 |
+| `seed.js` | 初期レシピ3件 |
+| `db.js` | IndexedDB |
+| `sw.js` / `manifest.webmanifest` / アイコンpng | PWA |
 
 ## データ設計（要点）
 IndexedDB `bread-note` のストア：`recipes` / `recipeVersions` / `bakes` / `photos` / `meta`

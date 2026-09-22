@@ -57,14 +57,15 @@ export function fmtPct(x) {
  * Compute gram amounts for every ingredient. Returns plain data (safe to freeze into a snapshot).
  * rows[id] = {id,name,group,kind,g,min,max,raw,text,precision,pct,perCount,note,tentative,moisture}
  */
-export function computeAmounts(v, sc) {
+export function computeAmounts(v, sc, plan = null) {
+  plan = plan || defaultPlan(v);
   const count = v.scaleMode === 'count' ? sc.count : v.baseCount ? v.baseCount * sc.factor : null;
   const rows = {};
   let doughRaw = 0, moist = 0;
   const groups = v.ingredientGroups.map((g) => ({
     id: g.id, name: g.name, kind: g.kind,
     rows: g.items.map((it) => {
-      const r = computeItem(it, sc, count);
+      const r = computeItem(it, sc, count, plan);
       r.group = g.id; r.kind = g.kind;
       rows[it.id] = r;
       if ((g.kind === 'flour' || g.kind === 'dough') && r.raw != null) {
@@ -81,16 +82,24 @@ export function computeAmounts(v, sc) {
     hydration: sc.flour ? (moist / sc.flour) * 100 : null,
     count,
     piece: count ? doughRaw / count : null,
+    plan,
   };
 }
 
-function computeItem(it, sc, count) {
+function computeItem(it, sc, count, plan) {
   const p = it.precision || 1;
   const base = { id: it.id, name: it.name, precision: p, note: it.note || '', tentative: !!it.tentative, moisture: it.moisture || 0 };
   if (it.basis === 'flour') {
-    const f = (k) => (it.pct[k] == null ? null : (it.pct[k] / 100) * sc.flour);
+    // byPlan: amount depends on the fermentation plan chosen at start (e.g. yeast for same-day vs cold)
+    const pct = (it.byPlan && plan && it.byPlan[plan]) || it.pct;
+    const f = (k) => (pct[k] == null ? null : (pct[k] / 100) * sc.flour);
     const raw = f('target');
-    return { ...base, raw, g: roundP(raw, p), min: roundP(f('min'), p), max: roundP(f('max'), p), pct: { ...it.pct } };
+    const out = { ...base, raw, g: roundP(raw, p), min: roundP(f('min'), p), max: roundP(f('max'), p), pct: { ...pct } };
+    if (it.byPlan) {
+      out.byPlan = {};
+      for (const [k, pp] of Object.entries(it.byPlan)) out.byPlan[k] = roundP((pp.target / 100) * sc.flour, p);
+    }
+    return out;
   }
   if (it.basis === 'perCount') {
     const c = count ?? 1;
@@ -120,12 +129,18 @@ export function fmtCount(c) {
   return Number.isInteger(c) ? String(c) : c.toFixed(1);
 }
 
-/** Step text templates: {{count}} {{divide}} {{piece}} {{per:id}} {{min:id}} {{max:id}} {{g:id}} */
+/** Part of an ingredient given as % of flour (e.g. water added in two stages). */
+export function partG(r, pctOfFlour, flour) {
+  return fmtNum(roundP((pctOfFlour / 100) * flour, r.precision), r.precision) + 'g';
+}
+
+/** Step text templates: {{part:id:pct}} {{count}} {{divide}} {{piece}} {{per:id}} {{min:id}} {{max:id}} {{g:id}} */
 export function tpl(text, amt) {
   if (!text) return '';
-  return text.replace(/\{\{(\w+)(?::([\w-]+))?\}\}/g, (m, k, id) => {
+  return text.replace(/\{\{(\w+)(?::([\w-]+))?(?::([\d.]+))?\}\}/g, (m, k, id, arg) => {
     const r = id ? amt.rows[id] : null;
     switch (k) {
+      case 'part': return r && arg ? partG(r, +arg, amt.flour) : m;
       case 'count': return fmtCount(amt.count);
       case 'divide': {
         const n = Math.max(1, Math.round(amt.count || 1));
@@ -150,9 +165,10 @@ export function flattenSteps(steps, choices = {}) {
   let unresolved = null;
   const walk = (arr, opt) => {
     for (const s of arr) {
-      list.push({ step: s, opt });
+      const o = s.type === 'branch' ? s.options.find((x) => x.id === choices[s.id]) : null;
+      // a plan decided at start needs no question mid-way: continue straight into its route
+      if (!(s.atStart && o)) list.push({ step: s, opt });
       if (s.type === 'branch') {
-        const o = s.options.find((x) => x.id === choices[s.id]);
         if (!o) { unresolved = s; return true; }
         if (walk(o.steps, o.label)) return true;
       }
@@ -163,6 +179,14 @@ export function flattenSteps(steps, choices = {}) {
   const extra = unresolved ? Math.max(...unresolved.options.map((o) => countDeep(o.steps))) : 0;
   return { list, unresolved, estTotal: list.length + extra };
 }
+/** The branch whose route is chosen when baking starts (fermentation plan), if any. */
+export function planBranch(v) {
+  let f = null;
+  eachStep(v.steps, (s) => { if (!f && s.type === 'branch' && s.atStart) f = s; });
+  return f;
+}
+export function defaultPlan(v) { return planBranch(v)?.options[0].id || null; }
+
 function countDeep(steps) {
   let n = 0;
   for (const s of steps) {

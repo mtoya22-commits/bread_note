@@ -474,3 +474,10 @@ textarea.next-memo { background: var(--accent-soft); border-color: transparent; 
   .branch-opts { grid-template-columns: 1fr 1fr; }
   .branch-pick { grid-template-columns: 1fr 1fr; }
 }
+
+/* fermentation plan */
+.plan-h { margin-top: 14px; font-weight: 800; color: var(--brown-2); font-size: 14px; }
+.seg.plan { margin-top: 6px; }
+.bopt.dim { opacity: .45; }
+.mk-plan { margin: 10px 16px 0; display: inline-block; align-self: flex-start; background: var(--cold-soft); color: var(--cold); font-weight: 800; font-size: 13px; padding: 3px 12px; border-radius: 999px; }
+.bp-amt { color: var(--accent-2) !important; font-size: 16px; }
