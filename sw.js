@@ -1,11 +1,11 @@
 // パンノート service worker — offline app shell.
 // デプロイで中身を変えたら VERSION を上げてください（古いキャッシュが破棄されます）。
-const VERSION = 'bread-note-v1.0.0';
+const VERSION = 'bread-note-v1.0.1';
 const ASSETS = [
   './', './index.html', './styles.css',
-  './js/app.js', './js/db.js', './js/calc.js', './js/seed.js',
+  './app.js', './db.js', './calc.js', './seed.js',
   './manifest.webmanifest',
-  './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
+  './icon-192.png', './icon-512.png', './apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (e) => {
