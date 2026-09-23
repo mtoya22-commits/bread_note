@@ -43,6 +43,22 @@ const RODEV_BAKE = (p) => [
   { id: `${p}-cool`, title: '冷ます', body: '網の上で完全に冷ます。断面は冷めてから。' },
 ];
 
+// 12cm角型の2バリエーション（B: HB＋型 / C: 手ごね＋型）は配合を完全共通にする
+const PAN12_GROUPS = () => ([
+  { id: 'flour', name: '粉', kind: 'flour', items: [I('haru', '春よ恋', 218.75), I('kitano', 'キタノカオリ', 31.25)] },
+  { id: 'dough', name: 'その他', kind: 'dough', items: [
+    I('milk', '牛乳', 142.857142857, { moisture: 0.88 }),
+    I('water', '水', { target: 22.321428571, min: 22.321428571, max: 26.785714286 }, { moisture: 1, note: '生地が硬い場合のみ最大＋約4g' }),
+    I('cream', '生クリーム', 22.321428571, { moisture: 0.5 }),
+    I('sugar', '砂糖', 17.857142857),
+    I('honey', 'はちみつ', 13.392857143, { moisture: 0.2 }),
+    I('salt', '塩', 4.017857143, { precision: 0.1 }),
+    I('butter', '無塩バター', 25),
+    I('yeast', 'ドライイースト', 2.678571429, { precision: 0.1 }),
+  ] },
+  { id: 'finish', name: '仕上げ', kind: 'finish', items: [{ id: 'mbutter', name: '溶かしバター（好みで）', text: '2〜3g' }] },
+]);
+
 export function buildSeedRecipes() {
   return [
     // ───────────────────────────── カレーパン
@@ -183,12 +199,12 @@ export function buildSeedRecipes() {
     // ───────────────────────────── 食パン（2 variants）
     recipe({
       id: 'shokupan-junnama',
-      seedRev: 2,
+      seedRev: 3,
       name: 'ふわもち純生食パン',
       category: '食パン',
       difficulty: 2,
-      tags: ['当日完成'],
-      description: 'しっとりふわもち。HB全自動と、HB＋12cm角型の2通りで作れる。',
+      tags: ['当日完成', '手ごね'],
+      description: 'しっとりふわもち。HB全自動、HB＋12cm角型、手ごね＋12cm角型の3通り。BとCは配合が同じなので、こね方の違いを記録で比べられる。',
       variants: [
         {
           id: 'hb-auto', name: 'A. HB全自動',
@@ -228,20 +244,8 @@ export function buildSeedRecipes() {
           equipment: ['蓋付き12cm角型'],
           hb: { mode: 'knead_first_fermentation', recommendation: 'recommended', model: 'siroca SB-2D271', course: 'パン生地コース', notes: ['こね〜一次発酵までHB'] },
           bakeSummary: '210℃予熱 → 195℃ 30〜33分',
-          ingredientGroups: [
-            { id: 'flour', name: '粉', kind: 'flour', items: [I('haru', '春よ恋', 218.75), I('kitano', 'キタノカオリ', 31.25)] },
-            { id: 'dough', name: 'その他', kind: 'dough', items: [
-              I('milk', '牛乳', 142.857142857, { moisture: 0.88 }),
-              I('water', '水', { target: 22.321428571, min: 22.321428571, max: 26.785714286 }, { moisture: 1, note: '生地が硬い場合のみ最大＋約4g' }),
-              I('cream', '生クリーム', 22.321428571, { moisture: 0.5 }),
-              I('sugar', '砂糖', 17.857142857),
-              I('honey', 'はちみつ', 13.392857143, { moisture: 0.2 }),
-              I('salt', '塩', 4.017857143, { precision: 0.1 }),
-              I('butter', '無塩バター', 25),
-              I('yeast', 'ドライイースト', 2.678571429, { precision: 0.1 }),
-            ] },
-            { id: 'finish', name: '仕上げ', kind: 'finish', items: [{ id: 'mbutter', name: '溶かしバター（好みで）', text: '2〜3g' }] },
-          ],
+          timeLabel: '約2.5〜3.5時間',
+          ingredientGroups: PAN12_GROUPS(),
           steps: [
             { id: 'b1', title: 'HBでこね〜一次発酵',
               uses: ['haru', 'kitano', 'milk', 'water', 'cream', 'sugar', 'honey', 'salt', 'butter', 'yeast'],
@@ -263,6 +267,53 @@ export function buildSeedRecipes() {
             '初回は「型の縁より約1cm下」で蓋をする',
             '有塩バター使用時は塩を0.5g減らす',
             'この食パンではモルトとリスドォルは使わない',
+            'C（手ごね）とは配合・型・焼成が同じ。ただし一次発酵の環境が違うので、純粋なこね方だけの比較ではない',
+          ],
+        },
+        {
+          id: 'hand-pan12', name: 'C. 手ごね＋12cm角型',
+          scaleMode: 'panVolume', baseFlour: 250,
+          basePan: { name: '蓋付き12cm角型', w: 12, d: 12, h: 12 },
+          yieldLabel: '12cm角型 1本',
+          equipment: ['蓋付き12cm角型'],
+          hb: { mode: 'none', label: '手ごね', recommendation: 'not_recommended', model: '', course: '', notes: ['手ごね（HBは使わない）'] },
+          bakeSummary: '210℃予熱 → 195℃ 30〜33分',
+          timeLabel: '約3〜4時間',
+          ingredientGroups: PAN12_GROUPS(),
+          steps: [
+            { id: 'h1', title: '材料を混ぜる',
+              uses: ['haru', 'kitano', 'sugar', 'salt', 'yeast', 'milk', 'cream', 'honey', 'water'],
+              body: 'ボウルに粉2種・砂糖・塩・ドライイーストを入れる（塩の上にイーストを置かない）。別容器で牛乳・生クリーム・はちみつ・水を混ぜて加え、ヘラやカードで粉気がなくなるまで混ぜる。バターはまだ入れない。' },
+            { id: 'h2', title: '休ませる', body: 'ラップをして休ませる。発酵ではなく、水分をなじませて手ごねを楽にするための時間。',
+              timer: { min: 10, label: '水分をなじませる' } },
+            { id: 'h3', title: '一次こね', body: '台に出してこねる。打ち粉は原則使わず、「押す・折る・転がす」を繰り返す。生地がつながり、表面が少し滑らかになったら次へ。',
+              timer: { min: 5, max: 8, label: '一次こね' },
+              tips: ['べたつくうちはカードで台から剥がしながら続ける'] },
+            { id: 'h4', title: 'バターを加える', uses: ['butter'],
+              body: '柔らかくした無塩バターを加え、そのままこね続ける。',
+              tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
+            { id: 'h5', title: '本ごね', body: '時間より生地の状態で判断する。滑らかで弾力があり、薄く伸ばすと指が透ける膜ができればOK。完全に破れない極薄膜まで追い込む必要はない。',
+              timer: { min: 8, max: 15, label: '本ごね' } },
+            { id: 'h6', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
+              tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳などの液温を下げる'] },
+            { id: 'h7', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
+              ferment: { temp: '28〜30℃', cue: '約2倍', min: 60, max: 90 } },
+            { id: 'h8', title: '分割・ベンチ', body: '2分割して軽く丸め、休ませる。', timer: { min: 15, label: 'ベンチタイム' } },
+            { id: 'h9', title: '成形', body: '縦長に伸ばす。左右を中央へ折り、軽く伸ばして上から巻く。同じものを2本作り、巻き終わりを下にして型へ入れる。' },
+            { id: 'h10', title: '二次発酵', body: '時間固定ではなく高さを優先して判定する。',
+              ferment: { temp: '32〜35℃', cue: '生地頂点が型の縁より約1cm下 → 蓋をする', min: 45, max: 75 },
+              tips: ['終盤に210℃で予熱を開始', '初回は「型の縁より約1cm下」で蓋をする'] },
+            { id: 'h11', title: '焼成', body: '210℃で予熱 → 195℃で焼く。焼き不足なら2〜3分追加。', timer: { min: 30, max: 33, label: '焼成 195℃' } },
+            { id: 'h12', title: '焼成後', uses: ['mbutter'], body: '型に軽くショックを与え、すぐ型から取り出す。好みで表面に溶かしバターを薄く塗る。' },
+            { id: 'h13', title: '冷却', body: '粗熱を取り、まだ少し温かい段階で袋へ。' },
+          ],
+          tips: [
+            '配合・型・焼成はBと同じ。違うのはこね方と一次発酵の環境',
+            '基準は粉250g・総生地量 約500g（12cm角型＝1728cm³で型比容積 約3.45）',
+            'こね上がり生地温 26〜28℃が目安（ロデヴの24〜26℃とは別）',
+            '本ごねは時間より膜の状態を優先',
+            '角が丸すぎる → 二次発酵不足 ／ 角が鋭すぎる、側面がへこむ → 発酵しすぎ',
+            '有塩バター使用時は塩を0.5g減らす',
           ],
         },
       ],

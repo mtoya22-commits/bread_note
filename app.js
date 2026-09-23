@@ -2,7 +2,7 @@ import * as db from './db.js';
 import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '1.0.7';
+export const APP_VERSION = '1.0.8';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -170,7 +170,7 @@ const subhead = (title, sub = '', right = '', backHref = '') => `
 function hbBadge(hb) {
   if (!hb) return '';
   const cls = hb.recommendation === 'not_recommended' ? 'b-mute' : hb.mode === 'none' ? 'b-mute' : 'b-hb';
-  const label = hb.mode === 'none' ? `HB${C.HB_REC_LABEL[hb.recommendation] || '不使用'}` : C.HB_MODE_LABEL[hb.mode];
+  const label = hb.label || (hb.mode === 'none' ? `HB${C.HB_REC_LABEL[hb.recommendation] || '不使用'}` : C.HB_MODE_LABEL[hb.mode]);
   return `<span class="badge ${cls}">${esc(label)}</span>`;
 }
 const statusBadge = (s) => `<span class="badge b-status s-${esc(s)}">${esc(s)}</span>`;
@@ -358,7 +358,7 @@ function vRecipe(id) {
       <div class="sm-i"><div class="k">水分率</div><div class="v">${amt.hydration != null ? Math.round(amt.hydration) + '%' : '-'}</div></div>
       <div class="sm-i"><div class="k">難易度</div><div class="v diff">${'★'.repeat(r.difficulty || 0)}<span>${'★'.repeat(Math.max(0, 4 - (r.difficulty || 0)))}</span></div></div>
     </div>
-    <div class="sum-line">${hbBadge(v.hb)}${hasColdV ? `<span class="badge b-cold">${esc(ferm.join(' / '))}</span>` : ''}${v.bakeSummary ? `<span class="badge">${esc(v.bakeSummary)}</span>` : ''}</div>
+    <div class="sum-line">${hbBadge(v.hb)}${hasColdV ? `<span class="badge b-cold">${esc(ferm.join(' / '))}</span>` : ''}${v.timeLabel ? `<span class="badge">⏱ ${esc(v.timeLabel)}</span>` : ''}${v.bakeSummary ? `<span class="badge">${esc(v.bakeSummary)}</span>` : ''}</div>
 
     ${pb ? `<div class="plan-h">発酵の計画 <span class="muted small">作り始めに選びます</span></div><div class="seg plan">${pb.options.map((o) => `<button class="${o.id === plan ? 'on' : ''}" data-act="plan" data-r="${r.id}" data-p="${o.id}">${o.icon || ''} ${esc(o.label)}</button>`).join('')}</div>` : ''}
     ${scalePanel(r, v, sc)}
@@ -768,7 +768,7 @@ async function startBake(r, v, planId = null) {
     },
     progress: { currentStepId: first.id, choices: planOpt ? { [pb.id]: planOpt.id } : {}, log: { [first.id]: { startedAt: now } } },
     timers: [],
-    env: { room: '', water: '' },
+    env: { room: '', water: '', dough: '' },
     rating: null, scores: {}, notes: '', bakeMemo: '', nextMemo: '',
     photoIds: [],
   };
@@ -977,7 +977,9 @@ function vRecord(id) {
       <div class="env">
         <label>室温<span><input type="number" inputmode="decimal" value="${esc(b.env.room)}" data-on="rec" data-b="${b.id}" data-k="env.room">℃</span></label>
         <label>水温<span><input type="number" inputmode="decimal" value="${esc(b.env.water)}" data-on="rec" data-b="${b.id}" data-k="env.water">℃</span></label>
-      </div>`)}
+        <label>生地温<span><input type="number" inputmode="decimal" value="${esc(b.env.dough ?? '')}" data-on="rec" data-b="${b.id}" data-k="env.dough">℃</span></label>
+      </div>
+      <div class="muted small">生地温：こね上がり（ロデヴは混ぜ終わり）の温度</div>`)}
 
     ${logRows.length ? section('工程ログ', `<div class="card list">${logRows.map((x) => `<div class="log-row"><span>${esc(x.title)}</span><span class="lr-v">${x.dur != null ? fmtDur(x.dur) : x.start ? '計測中' : '-'}${x.j ? `<small>${esc(x.j)}</small>` : ''}</span></div>`).join('')}</div>`) : ''}
 
