@@ -2,7 +2,7 @@ import * as db from './db.js';
 import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '1.0.6';
+export const APP_VERSION = '1.0.7';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);

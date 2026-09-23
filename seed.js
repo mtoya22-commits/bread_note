@@ -39,7 +39,7 @@ function recipe(r) {
 
 const RODEV_BAKE = (p) => [
   { id: `${p}-bake1`, title: '焼成①', body: '250℃・スチームあり。', timer: { min: 10, label: '焼成① 250℃' } },
-  { id: `${p}-bake2`, title: '焼成②', body: '230℃に下げて焼く。焼き色を見て15〜18分。', timer: { min: 15, max: 18, label: '焼成② 230℃' } },
+  { id: `${p}-bake2`, title: '焼成②', body: '蒸気を抜き、230℃に下げて焼く。焼き色を見て15〜18分。', timer: { min: 15, max: 18, label: '焼成② 230℃' } },
   { id: `${p}-cool`, title: '冷ます', body: '網の上で完全に冷ます。断面は冷めてから。' },
 ];
 
@@ -48,6 +48,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── カレーパン
     recipe({
       id: 'curry-pan',
+      seedRev: 2,
       name: '薄皮もちもち俵型カレーパン',
       category: '惣菜パン',
       difficulty: 2,
@@ -92,7 +93,7 @@ export function buildSeedRecipes() {
             body: '粉類、砂糖、塩、ベーキングパウダー、スキムミルクを混ぜる。卵・油・水{{min:water}}を加え、5〜7分こねる。硬い場合だけ残りの水を少量ずつ加える（合計最大{{max:water}}）。',
             hb: 'HB使用時：「こねる」5分 → 硬ければ水を少量追加 → 必要ならさらに2分。発酵機能は使わない。',
             timer: { min: 5, max: 7, label: 'こね' } },
-          { id: 'c3', title: '休ませる', body: 'ラップをして室温で休ませる。これは発酵ではなく、生地を伸ばしやすくするため。',
+          { id: 'c3', title: '休ませる', body: 'ラップをして室温で休ませる。これは発酵ではなく、生地を伸ばしやすくするため。30分を大きく超えて休ませない。',
             timer: { min: 20, max: 30, label: '生地を休ませる' } },
           { id: 'c4', title: '分割・伸ばす',
             body: '{{count}}等分。1個約{{piece}}gを目安にする。長さ15〜17cm、幅8〜9cm程度の楕円に伸ばす。中央は少し厚め、端は薄め。' },
@@ -104,16 +105,17 @@ export function buildSeedRecipes() {
             tips: ['薄皮感を残すためパン粉も薄くする'] },
           { id: 'c7', title: '揚げる', uses: ['fryoil'],
             body: '170〜175℃。閉じ目を下にして入れ、途中で返しながら揚げる。全体がきつね色になったら取り出す。',
+            tips: ['冷たいカレーを包むため、揚げ上がりでも中心が熱々にならない場合がある', '熱々で食べたい場合は食べる直前に軽く温め直す'],
             timer: { min: 3, max: 4, label: '揚げ' } },
         ],
-        tips: ['発酵なし', 'カレーは必ず固く、冷たくする', '閉じ目に打ち粉や油を付けない', '薄皮感を残すためパン粉も薄くする'],
+        tips: ['発酵なし', 'カレーは必ず固く、冷たくする', '休ませは20〜30分まで（30分を大きく超えない）', '閉じ目に打ち粉や油を付けない', '薄皮感を残すためパン粉も薄くする'],
       }],
     }),
 
     // ───────────────────────────── ロデヴ（確定版）
     recipe({
       id: 'rodev-90',
-      seedRev: 2, // 標準版の改訂番号。上げると未編集の端末は自動更新、編集済みの端末には更新の提案が出る
+      seedRev: 3, // 標準版の改訂番号。上げると未編集の端末は自動更新、編集済みの端末には更新の提案が出る
       name: '高加水90%ロデヴ',
       category: '高加水',
       difficulty: 3,
@@ -140,7 +142,7 @@ export function buildSeedRecipes() {
             body: '粉3種と水{{part:water:84}}を、粉気がなくなるまで混ぜる。残りの水はまだ入れない。' },
           { id: 'r2', title: 'オートリーズ', body: 'ラップをして休ませる。', timer: { min: 20, label: 'オートリーズ' } },
           { id: 'r3', title: 'イースト・塩・残りの水を加える', uses: ['yeast', 'salt', { ref: 'water', pctOfFlour: 6, label: '残りの水' }],
-            body: 'イーストと塩を加え、残りの水{{part:water:6}}を少しずつ揉み込むように加えて、全体がなじむまで混ぜる。' },
+            body: 'イーストと塩を加え、残りの水{{part:water:6}}を少しずつ揉み込むように加えて、全体がなじむまで混ぜる。混ぜ終えた時点の生地温は24〜26℃が目安。' },
           { id: 'r4', title: '休ませ①', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ①' } },
           { id: 'r5', title: '1回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
           { id: 'r6', title: '休ませ②', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ②' } },
@@ -154,15 +156,15 @@ export function buildSeedRecipes() {
                   ferment: { temp: '室温', cue: '1.5倍前後・表面に気泡が見える' } },
                 { id: 'td-div', title: '分割', body: '打ち粉をした台に出し、{{divide}}。成形はせず、形を軽く整える。' },
                 { id: 'td-ferm2', title: '最終発酵', body: '布どり等で休ませる。時間より生地の状態を優先する。',
-                  ferment: { temp: '室温', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 60 },
+                  ferment: { temp: '室温', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 90 },
                   tips: ['終盤にオーブンを250℃で予熱（スチームの準備も）'] },
                 ...RODEV_BAKE('td'),
               ] },
               { id: 'cold', label: '冷蔵発酵', icon: '❄️', sub: 'イースト0.2%・冷蔵4〜5℃で8〜15時間 → 翌日焼成', steps: [
-                { id: 'cd-cold', title: '冷蔵発酵', body: '3回目のフォールド後、容器ごと冷蔵庫（4〜5℃想定）へ入れる。', cold: { minH: 8, maxH: 15 } },
+                { id: 'cd-cold', title: '冷蔵発酵', body: '3回目のフォールド後、容器ごと冷蔵庫（4〜5℃想定）へ入れる。8時間は最短目安。通常は10〜14時間を狙い、生地の状態を優先する。', cold: { minH: 8, maxH: 15 } },
                 { id: 'cd-div', title: '取り出し・分割', body: '冷蔵庫から出し、{{divide}}。成形はせず、形を軽く整える。' },
                 { id: 'cd-ferm2', title: '復温・最終発酵', body: '布どり等で休ませ、復温を兼ねて最終発酵させる。時間より生地の状態を優先する。',
-                  ferment: { temp: '室温', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 60 },
+                  ferment: { temp: '室温', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 90 },
                   tips: ['終盤にオーブンを250℃で予熱（スチームの準備も）'] },
                 ...RODEV_BAKE('cd'),
               ] },
@@ -171,7 +173,9 @@ export function buildSeedRecipes() {
         tips: [
           '水は最初210g＋後入れ15g（グルテンを作ってから加水）',
           '追加モルトは使わない（リスドォルに麦芽入り）。焼き色・発酵が弱いと感じたときだけ0.1g程度を試す',
-          '最終発酵は時間より「ひと回り膨らみ、ガスが保たれていること」を優先',
+          '最終発酵は時間より「ひと回り膨らみ、ガスが保たれていること」を優先（40〜90分）',
+          '混ぜ終えた時点の生地温 24〜26℃が目安',
+          '冷蔵は8時間が最短目安。通常は10〜14時間',
         ],
       }],
     }),
@@ -179,6 +183,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── 食パン（2 variants）
     recipe({
       id: 'shokupan-junnama',
+      seedRev: 2,
       name: 'ふわもち純生食パン',
       category: '食パン',
       difficulty: 2,
@@ -217,23 +222,23 @@ export function buildSeedRecipes() {
         },
         {
           id: 'hb-pan12', name: 'B. HB＋12cm角型',
-          scaleMode: 'panVolume', baseFlour: 280,
+          scaleMode: 'panVolume', baseFlour: 250,
           basePan: { name: '蓋付き12cm角型', w: 12, d: 12, h: 12 },
           yieldLabel: '12cm角型 1本',
           equipment: ['蓋付き12cm角型'],
           hb: { mode: 'knead_first_fermentation', recommendation: 'recommended', model: 'siroca SB-2D271', course: 'パン生地コース', notes: ['こね〜一次発酵までHB'] },
           bakeSummary: '210℃予熱 → 195℃ 30〜33分',
           ingredientGroups: [
-            { id: 'flour', name: '粉', kind: 'flour', items: [I('haru', '春よ恋', 245), I('kitano', 'キタノカオリ', 35)] },
+            { id: 'flour', name: '粉', kind: 'flour', items: [I('haru', '春よ恋', 218.75), I('kitano', 'キタノカオリ', 31.25)] },
             { id: 'dough', name: 'その他', kind: 'dough', items: [
-              I('milk', '牛乳', 160, { moisture: 0.88 }),
-              I('water', '水', { target: 25, min: 25, max: 30 }, { moisture: 1, note: '生地が硬い場合のみ最大＋5g' }),
-              I('cream', '生クリーム', 25, { moisture: 0.5 }),
-              I('sugar', '砂糖', 20),
-              I('honey', 'はちみつ', 15, { moisture: 0.2 }),
-              I('salt', '塩', 4.5, { precision: 0.1 }),
-              I('butter', '無塩バター', 28),
-              I('yeast', 'ドライイースト', 3, { precision: 0.1 }),
+              I('milk', '牛乳', 142.857142857, { moisture: 0.88 }),
+              I('water', '水', { target: 22.321428571, min: 22.321428571, max: 26.785714286 }, { moisture: 1, note: '生地が硬い場合のみ最大＋約4g' }),
+              I('cream', '生クリーム', 22.321428571, { moisture: 0.5 }),
+              I('sugar', '砂糖', 17.857142857),
+              I('honey', 'はちみつ', 13.392857143, { moisture: 0.2 }),
+              I('salt', '塩', 4.017857143, { precision: 0.1 }),
+              I('butter', '無塩バター', 25),
+              I('yeast', 'ドライイースト', 2.678571429, { precision: 0.1 }),
             ] },
             { id: 'finish', name: '仕上げ', kind: 'finish', items: [{ id: 'mbutter', name: '溶かしバター（好みで）', text: '2〜3g' }] },
           ],
@@ -252,6 +257,7 @@ export function buildSeedRecipes() {
             { id: 'b7', title: '冷却', body: '粗熱を取り、まだ少し温かい段階で袋へ。' },
           ],
           tips: [
+            '基準は粉250g・総生地量 約500g（12cm角型＝1728cm³で型比容積 約3.45）',
             '角が丸すぎる → 二次発酵不足',
             '角が鋭すぎる、側面がへこむ → 発酵しすぎ',
             '初回は「型の縁より約1cm下」で蓋をする',
