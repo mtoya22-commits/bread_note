@@ -59,6 +59,45 @@ const PAN12_GROUPS = () => ([
   { id: 'finish', name: '仕上げ', kind: 'finish', items: [{ id: 'mbutter', name: '溶かしバター（好みで）', text: '2〜3g' }] },
 ]);
 
+
+// あんぱん：A（HB）とB（手ごね）は配合を完全共通にする
+const ANPAN_GROUPS = () => ([
+  { id: 'flour', name: '粉', kind: 'flour', items: [I('haru', '春よ恋', 180), I('kitano', 'キタノカオリ', 20)] },
+  { id: 'dough', name: 'その他', kind: 'dough', items: [
+    I('milk', '牛乳', { target: 120, max: 130 }, { moisture: 0.88, note: '硬ければ最大130gまで足す' }),
+    I('egg', '全卵', 20, { moisture: 0.75, note: '溶き卵から取り分け、残りは艶出しに使う' }),
+    I('sugar', '砂糖', 24),
+    I('salt', '塩', 3, { precision: 0.1 }),
+    I('yeast', 'ドライイースト', 2.4, { precision: 0.1 }),
+    I('butter', '無塩バター', 20),
+  ] },
+  { id: 'filling', name: 'フィリング', kind: 'filling', items: [
+    { id: 'anko', name: 'あんこ', perCount: { target: 35 }, note: '1個35g・冷やしておく' },
+  ] },
+  { id: 'finish', name: '仕上げ', kind: 'finish', items: [
+    { id: 'eggwash', name: '艶出し用の溶き卵', text: '適量（生地用の残り）' },
+    { id: 'sesame', name: '黒ごま・けしの実', text: '好みで' },
+  ] },
+]);
+
+// 分割から焼成までは A/B 共通
+const ANPAN_COMMON = (p) => ([
+  { id: `${p}-div`, title: '分割・ベンチ', body: '{{count}}分割。1個約{{piece}}g。軽く丸めて休ませる。',
+    timer: { min: 15, label: 'ベンチタイム' } },
+  { id: `${p}-wrap`, title: 'あんこを包む', uses: ['anko'],
+    body: '生地を中央がやや厚く、周囲が薄くなるように直径10cm前後へ伸ばす。中央にあんこ{{per:anko}}を置き、周囲の生地を集めてしっかり閉じる。閉じ目を下にして、手のひらで軽く押さえて平たく整える。',
+    tips: ['閉じ目付近にあんこを付けない', '平たく整えると焼成中に転がりにくく、底も浮きにくい'] },
+  { id: `${p}-ferm2`, title: '二次発酵', body: '時間より生地の状態を優先する。',
+    ferment: { temp: '32〜35℃', cue: 'ひと回りふっくら・指で軽く触ると柔らかい', min: 40, max: 60 },
+    tips: ['過発酵になると焼成時に横へ広がりやすい', '終盤に190℃で予熱を開始'] },
+  { id: `${p}-glaze`, title: '仕上げ', uses: ['eggwash', 'sesame'],
+    body: '表面に溶き卵を薄く塗り、好みで黒ごままたはけしの実を中央に少量のせる。',
+    tips: ['塗るのは必要量だけ。厚塗りしない', '（好みで）牛乳少量で薄めて漉すとムラになりにくい'] },
+  { id: `${p}-bake`, title: '焼成', body: '190℃で予熱 → 180℃で焼く。12分で焼き色を確認し、濃いきつね色になれば焼き上がり。弱ければ1〜2分追加。',
+    timer: { min: 12, max: 15, label: '焼成 180℃' } },
+  { id: `${p}-cool`, title: '冷ます', body: '網にのせて冷ます。' },
+]);
+
 export function buildSeedRecipes() {
   return [
     // ───────────────────────────── カレーパン
@@ -194,6 +233,82 @@ export function buildSeedRecipes() {
           '冷蔵は8時間が最短目安。通常は10〜14時間',
         ],
       }],
+    }),
+
+    // ───────────────────────────── あんぱん
+    recipe({
+      id: 'anpan',
+      seedRev: 1,
+      name: '基本のあんぱん',
+      category: '菓子パン',
+      difficulty: 2,
+      tags: ['当日完成', 'HB使用可', 'あんぱん'],
+      description: '春よ恋90%＋キタノカオリ10%の、ふわっと柔らかく少しもちっとした生地。あんこは1個35g。A（HB）とB（手ごね）は配合が同じ。',
+      variants: [
+        {
+          id: 'hb', name: 'A. HBこね〜一次発酵',
+          scaleMode: 'count', baseCount: 8, countUnit: '個', baseFlour: 200,
+          yieldLabel: '8個分',
+          timeLabel: '約3〜3.5時間',
+          hb: { mode: 'knead_first_fermentation', recommendation: 'recommended', model: 'siroca SB-2D271', course: 'パン生地コース',
+            notes: ['こね〜一次発酵までHB', '塩とイーストが直接重ならないように入れる', 'バターの投入タイミングは機種の指示に従う'] },
+          bakeSummary: '190℃予熱 → 180℃ 12〜15分',
+          ingredientGroups: ANPAN_GROUPS(),
+          steps: [
+            { id: 'a0', title: 'あんこを準備', uses: ['anko'],
+              body: 'あんこを{{count}}等分して丸め（1個{{per:anko}}）、冷蔵庫で冷やしておく。柔らかいあんこほど、冷やした方が包みやすい。' },
+            { id: 'a1', title: 'HBへ材料を投入', uses: ['haru', 'kitano', 'milk', 'egg', 'sugar', 'salt', 'yeast'],
+              body: '機種の指示に従う順番で投入する。塩とイーストが直接重ならないようにする。牛乳はまず{{min:milk}}、生地が硬ければ最大{{max:milk}}まで足す。',
+              hb: 'siroca SB-2D271：パン生地コース（こね〜一次発酵）' },
+            { id: 'a2', title: 'バターを加える', uses: ['butter'],
+              body: '生地がある程度つながってからバターを加える。投入タイミングは機種の指示に従う。' },
+            { id: 'a3', title: '一次発酵の仕上がりを確認',
+              body: 'パン生地コース終了。約2倍がめやす。足りなければ28〜30℃で10〜20分追加する。' },
+            ...ANPAN_COMMON('a'),
+          ],
+          tips: [
+            '基準は粉200g・8個（生地 約49g＋あんこ35g）',
+            '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
+            '閉じ目付近にあんこを付けない',
+            'B（手ごね）とは配合・焼成が同じ。違うのはこね方と一次発酵の環境',
+          ],
+        },
+        {
+          id: 'hand', name: 'B. 手ごね',
+          scaleMode: 'count', baseCount: 8, countUnit: '個', baseFlour: 200,
+          yieldLabel: '8個分',
+          timeLabel: '約3〜3.5時間',
+          hb: { mode: 'none', label: '手ごね', recommendation: 'not_recommended', model: '', course: '', notes: ['手ごね（HBは使わない）'] },
+          bakeSummary: '190℃予熱 → 180℃ 12〜15分',
+          ingredientGroups: ANPAN_GROUPS(),
+          steps: [
+            { id: 'h0', title: 'あんこを準備', uses: ['anko'],
+              body: 'あんこを{{count}}等分して丸め（1個{{per:anko}}）、冷蔵庫で冷やしておく。柔らかいあんこほど、冷やした方が包みやすい。' },
+            { id: 'h1', title: '材料を混ぜる', uses: ['haru', 'kitano', 'sugar', 'salt', 'yeast', { ref: 'milk', show: 'min' }, 'egg'],
+              body: 'ボウルに粉2種・砂糖・塩・ドライイーストを入れる（塩の上にイーストを置かない）。牛乳{{min:milk}}と溶き卵{{g:egg}}を加え、粉気がなくなるまで混ぜる。硬ければ牛乳を最大{{max:milk}}まで足す。バターはまだ入れない。' },
+            { id: 'h2', title: '休ませる', body: 'ラップをして休ませる。水分をなじませて手ごねを楽にするための時間。',
+              timer: { min: 5, max: 10, label: '水分をなじませる' } },
+            { id: 'h3', title: '一次こね', body: '台に出してこねる。生地がつながり、表面が少し滑らかになったら次へ。',
+              timer: { min: 5, max: 8, label: '一次こね' } },
+            { id: 'h4', title: 'バターを加える', uses: ['butter'], body: '柔らかくした無塩バターを加え、そのままこね続ける。',
+              tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
+            { id: 'h5', title: '本ごね', body: '時間より生地の状態で判断する。薄く伸ばすと指が透ける膜ができればOK。',
+              timer: { min: 8, max: 15, label: '本ごね' } },
+            { id: 'h6', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
+              tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳の温度を下げる'] },
+            { id: 'h7', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
+              ferment: { temp: '28〜30℃', cue: '約2倍', min: 60, max: 90 } },
+            ...ANPAN_COMMON('h'),
+          ],
+          tips: [
+            '配合・焼成はAと同じ。違うのはこね方と一次発酵の環境',
+            '基準は粉200g・8個（生地 約49g＋あんこ35g）',
+            'こね上がり生地温 26〜28℃が目安',
+            '本ごねは時間より膜の状態を優先',
+            '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
+          ],
+        },
+      ],
     }),
 
     // ───────────────────────────── 食パン（2 variants）
