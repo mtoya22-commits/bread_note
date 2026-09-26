@@ -62,10 +62,14 @@ export function computeAmounts(v, sc, plan = null) {
   const count = v.scaleMode === 'count' ? sc.count : v.baseCount ? v.baseCount * sc.factor : null;
   const rows = {};
   let doughRaw = 0, moist = 0;
-  const groups = v.ingredientGroups.map((g) => ({
+  const groups = v.ingredientGroups.map((g) => {
+    // prep with a batch: made in whole units (e.g. custard by 4 pieces), independent of flour
+    const bp = g.kind === 'prep' && g.batch ? prepPlan(g.batch, count) : null;
+    return {
     id: g.id, name: g.name, kind: g.kind,
+    ...(bp ? { batch: { ...g.batch }, prep: bp } : {}),
     rows: g.items.map((it) => {
-      const r = computeItem(it, sc, count, plan);
+      const r = computeItem(it, sc, count, plan, bp);
       r.group = g.id; r.kind = g.kind;
       rows[it.id] = r;
       if ((g.kind === 'flour' || g.kind === 'dough') && r.raw != null) {
@@ -74,7 +78,15 @@ export function computeAmounts(v, sc, plan = null) {
       }
       return r;
     }),
-  }));
+  };
+  });
+  // how much of each prep will actually be used (from fillings that point to it via madeBy)
+  for (const g of groups) {
+    if (!g.prep) continue;
+    const src = v.ingredientGroups.flatMap((x) => x.items).filter((it) => it.madeBy === g.id);
+    g.prep.useG = src.reduce((sum, it) => sum + (rows[it.id]?.raw || 0), 0);
+    g.prep.usedBy = src.map((it) => it.id);
+  }
   return {
     groups, rows,
     flour: sc.flour,
@@ -86,9 +98,16 @@ export function computeAmounts(v, sc, plan = null) {
   };
 }
 
-function computeItem(it, sc, count, plan) {
+function computeItem(it, sc, count, plan, bp = null) {
   const p = it.precision || 1;
   const base = { id: it.id, name: it.name, precision: p, note: it.note || '', tentative: !!it.tentative, moisture: it.moisture || 0 };
+  if (it.madeBy) base.madeBy = it.madeBy;
+  if (it.basis === 'batch') {
+    // grams are per batch unit (not baker's %); multiplied by the number of units to make
+    const units = bp ? bp.units : 1;
+    const raw = (+it.g || 0) * units;
+    return { ...base, raw, g: roundP(raw, p), perUnit: +it.g || 0, perCook: bp ? bp.cooks.map((u) => roundP((+it.g || 0) * u, p)) : null };
+  }
   if (it.basis === 'flour') {
     // byPlan: amount depends on the fermentation plan chosen at start (e.g. yeast for same-day vs cold)
     const pct = (it.byPlan && plan && it.byPlan[plan]) || it.pct;
@@ -134,13 +153,19 @@ export function partG(r, pctOfFlour, flour) {
   return fmtNum(roundP((pctOfFlour / 100) * flour, r.precision), r.precision) + 'g';
 }
 
-/** Step text templates: {{part:id:pct}} {{count}} {{divide}} {{piece}} {{per:id}} {{min:id}} {{max:id}} {{g:id}} */
+/** Step text templates: {{batch:group}} {{use:group}} {{part:id:pct}} {{count}} {{divide}} {{piece}} {{per:id}} {{min:id}} {{max:id}} {{g:id}} */
 export function tpl(text, amt) {
   if (!text) return '';
   return text.replace(/\{\{(\w+)(?::([\w-]+))?(?::([\d.]+))?\}\}/g, (m, k, id, arg) => {
     const r = id ? amt.rows[id] : null;
     switch (k) {
       case 'part': return r && arg ? partG(r, +arg, amt.flour) : m;
+      case 'batch': { const g = (amt.groups || []).find((x) => x.id === id); return g?.prep ? batchLabel(g) : m; }
+      case 'use': {
+        const g = (amt.groups || []).find((x) => x.id === id);
+        if (g?.prep) return `${Math.round(g.prep.useG)}g`;
+        return r ? fmtAmount(r) : m;
+      }
       case 'count': return fmtCount(amt.count);
       case 'divide': {
         const n = Math.max(1, Math.round(amt.count || 1));
@@ -217,3 +242,143 @@ export function hasCold(steps) {
 
 /** Whole-piece count for display (flour-mode recipes that also know their piece count). */
 export const pieces = (count) => (count == null ? null : Math.max(1, Math.round(count)));
+
+/* ───────────── prep made in batches (e.g. custard) ───────────── */
+
+/**
+ * batch = { unit, maxUnitsPerCook, yieldPerUnit }
+ * units = max(1, ceil(count / unit)); cooks split units into chunks of maxUnitsPerCook.
+ *   e.g. unit 4, max 2: 1–4 → [1], 5–8 → [2], 9–12 → [2,1], 13–16 → [2,2], 17–20 → [2,2,1]
+ */
+export function prepPlan(batch, count) {
+  const unit = Math.max(1, +batch.unit || 1);
+  const maxPer = Math.max(1, +batch.maxUnitsPerCook || Infinity);
+  const n = count == null || !(count > 0) ? unit : count;
+  let units = Math.max(1, Math.ceil(n / unit - 1e-9));
+  const total = units;
+  const cooks = [];
+  while (units > 0) { const u = Math.min(maxPer, units); cooks.push(u); units -= u; }
+  return { unit, units: total, cooks, makeCount: total * unit };
+}
+export function batchLabel(g) {
+  const { cooks, unit } = g.prep;
+  const parts = cooks.map((u) => `${u * unit}個分`);
+  return cooks.length === 1 ? parts[0] : `${parts.join('＋')}（${cooks.length}回に分けて炊く）`;
+}
+/** yieldPerUnit must cover what one unit is meant to fill: yieldPerUnit >= perCount × unit */
+export function prepYieldWarnings(v) {
+  const out = [];
+  const items = v.ingredientGroups.flatMap((g) => g.items);
+  for (const g of v.ingredientGroups) {
+    if (g.kind !== 'prep' || !g.batch || g.batch.yieldPerUnit == null) continue;
+    for (const it of items.filter((x) => x.madeBy === g.id && x.perCount)) {
+      const need = (+it.perCount.target || 0) * (+g.batch.unit || 1);
+      if (+g.batch.yieldPerUnit + 1e-9 < need) {
+        out.push({ groupId: g.id, need, yieldPerUnit: +g.batch.yieldPerUnit, msg: `1単位の仕上がりが使用量に足りない可能性があります（${g.name}：目安${g.batch.yieldPerUnit}g／必要${Math.round(need)}g）` });
+      }
+    }
+  }
+  return out;
+}
+
+/* ───────────── dough identity ───────────── */
+
+export const normName = (s) => String(s ?? '').normalize('NFKC').replace(/\s+/g, '').trim();
+const q = (x) => (x == null || !Number.isFinite(+x) ? null : Math.round(+x * 100)); // 0.01% steps
+
+/** Canonical entries of the dough part (kind flour/dough only): Map key → {name, t, min, max, plan} */
+export function doughEntries(v) {
+  const map = new Map();
+  for (const g of v.ingredientGroups) {
+    if (g.kind !== 'flour' && g.kind !== 'dough') continue;
+    for (const it of g.items) {
+      const key = it.ingKey || normName(it.name);
+      const e = map.get(key) || { key, name: it.name, t: 0, min: null, max: null, plan: null, text: null };
+      if (it.basis === 'flour' && it.pct) {
+        const add = (a, b) => (b == null ? a : (a ?? 0) + b);
+        e.t += +it.pct.target || 0;
+        e.min = add(e.min, it.pct.min);
+        e.max = add(e.max, it.pct.max);
+        if (it.byPlan) {
+          e.plan = e.plan || {};
+          for (const [k, pp] of Object.entries(it.byPlan)) e.plan[k] = (e.plan[k] || 0) + (+pp.target || 0);
+        }
+      } else {
+        e.text = it.text ?? (it.perCount ? `pc${it.perCount.target}` : '');
+      }
+      map.set(key, e);
+    }
+  }
+  return map;
+}
+function entryString(e) {
+  const t = q(e.t);
+  let out = `${e.key}=${t}`;
+  const mn = q(e.min), mx = q(e.max);
+  if (mn != null && mn !== t) out += `,m=${mn}`;
+  if (mx != null && mx !== t) out += `,M=${mx}`;
+  if (e.plan) out += ',p=' + Object.keys(e.plan).sort().map((k) => `${k}:${q(e.plan[k])}`).join('/');
+  if (e.text) out += `,x=${e.text}`;
+  return out;
+}
+/** Same string ⇔ exactly the same dough formula. Order-independent; ignores precision/note/moisture. */
+export function doughSignature(v) {
+  const entries = [...doughEntries(v).values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return 'sig1|' + entries.map(entryString).join(';');
+}
+/** Human-readable differences between two dough formulas (for 「同じ系統・配合違い」). */
+const pctTxt = (qv) => `${qv / 100}%`;
+function rangeTxt(e) {
+  if (!e) return 'なし';
+  const t = q(e.t), mn = q(e.min), mx = q(e.max);
+  const lo = mn != null && mn !== t ? mn : null;
+  const hi = mx != null && mx !== t ? mx : null;
+  if (lo == null && hi == null) return pctTxt(t);
+  return `${(lo ?? t) / 100}〜${pctTxt(hi ?? t)}`;   // 例: 60〜65%
+}
+export function doughDiff(a, b) {
+  const A = doughEntries(a), B = doughEntries(b);
+  const pb = planBranch(a) || planBranch(b);
+  const planLabel = (k) => pb?.options.find((o) => o.id === k)?.label || k;
+  const keys = [...new Set([...A.keys(), ...B.keys()])].sort();
+  const out = [];
+  for (const k of keys) {
+    const x = A.get(k), y = B.get(k);
+    if (x && y && entryString(x) === entryString(y)) continue;
+    const name = (y || x).name;
+    if (!x || !y) { out.push(`${name} ${rangeTxt(x)}→${rangeTxt(y)}`); continue; }
+    // 量（target と min/max の幅）
+    if (rangeTxt(x) !== rangeTxt(y)) out.push(`${name} ${rangeTxt(x)}→${rangeTxt(y)}`);
+    // 発酵計画ごとの量（例: ロデヴのイースト）
+    const pk = [...new Set([...Object.keys(x.plan || {}), ...Object.keys(y.plan || {})])].sort();
+    for (const pkey of pk) {
+      const px = x.plan?.[pkey], py = y.plan?.[pkey];
+      if (q(px) === q(py)) continue;
+      out.push(`${name}（${planLabel(pkey)} ${px == null ? 'なし' : pctTxt(q(px))}→${py == null ? 'なし' : pctTxt(q(py))}）`);
+    }
+    if ((x.text || '') !== (y.text || '')) out.push(`${name}（${x.text || 'なし'}→${y.text || 'なし'}）`);
+  }
+  return out;
+}
+/** Unrounded dough weight per piece at the recipe's base size (null when the recipe has no piece count). */
+export function pieceWeight(v) {
+  const n = v.scaleMode === 'count' ? v.baseCount : v.baseCount || null;
+  if (!n) return null;
+  const a = computeAmounts(v, scaleFor(v, {}));
+  return a.dough / n;
+}
+export const samePieceWeight = (a, b, tol = 1.0) => a != null && b != null && Math.abs(a - b) <= tol + 1e-6;
+
+/** Every step (incl. branch routes) carries a phase → usable for mix planning later. */
+export function phaseComplete(v) {
+  let ok = true;
+  eachStep(v.steps, (s) => { if (s.type !== 'branch' && !s.phase) ok = false; });
+  return ok;
+}
+
+/** HB capacity is tied to the machine/course of this variant; warn when the flour exceeds it. */
+export function hbCapacityWarning(v, flour) {
+  const cap = v.hb?.capacity;
+  if (!cap || !(cap.flourMax > 0) || !(flour > cap.flourMax + 1e-9)) return null;
+  return `HB${cap.course ? `「${cap.course}」` : ''}コースの基準容量（粉${cap.flourMax}g）を超えます（現在 粉${Math.round(flour)}g）`;
+}

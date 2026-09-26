@@ -1,8 +1,8 @@
 import * as db from './db.js';
-import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited } from './seed.js';
+import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited, DOUGH_FAMILIES } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '1.0.9';
+export const APP_VERSION = '1.1.1';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -359,9 +359,12 @@ function vRecipe(id) {
       <div class="sm-i"><div class="k">難易度</div><div class="v diff">${'★'.repeat(r.difficulty || 0)}<span>${'★'.repeat(Math.max(0, 4 - (r.difficulty || 0)))}</span></div></div>
     </div>
     <div class="sum-line">${hbBadge(v.hb)}${hasColdV ? `<span class="badge b-cold">${esc(ferm.join(' / '))}</span>` : ''}${v.timeLabel ? `<span class="badge">⏱ ${esc(v.timeLabel)}</span>` : ''}${v.bakeSummary ? `<span class="badge">${esc(v.bakeSummary)}</span>` : ''}</div>
+    ${v.timeNote ? `<div class="time-note">⏱ ${esc(v.timeNote)}</div>` : ''}
 
     ${pb ? `<div class="plan-h">発酵の計画 <span class="muted small">作り始めに選びます</span></div><div class="seg plan">${pb.options.map((o) => `<button class="${o.id === plan ? 'on' : ''}" data-act="plan" data-r="${r.id}" data-p="${o.id}">${o.icon || ''} ${esc(o.label)}</button>`).join('')}</div>` : ''}
     ${scalePanel(r, v, sc)}
+    ${(() => { const w = C.hbCapacityWarning(v, sc.flour); return w ? `<div class="card warn cap-warn">⚠️ ${esc(w)}</div>` : ''; })()}
+    ${doughCard(r, v)}
 
     <div class="tabs3">
       <button class="${tab === 'ing' ? 'on' : ''}" data-act="dtab" data-r="${r.id}" data-t="ing">材料</button>
@@ -375,6 +378,35 @@ function vRecipe(id) {
   <div class="startbar">
     ${act.length ? `<button class="btn ghost" data-act="nav" data-href="#/make/${act[0].id}">進行中 #${act[0].seq}</button>` : ''}
     <button class="btn primary big" data-act="start" data-r="${r.id}" data-v="${v.id}">${ICON.fire}このレシピで作る</button>
+  </div>`;
+}
+
+/* 生地カード：同じ配合／同じ系統・配合違い（同じレシピの別バリエーションは出さない） */
+const familyName = (v) => DOUGH_FAMILIES[v.dough?.familyId]?.name || v.dough?.familyName || v.dough?.familyId || '';
+function doughRelations(r, v) {
+  const fid = v.dough?.familyId;
+  if (!fid) return null;
+  const sig = C.doughSignature(v);
+  const same = [], diff = [];
+  for (const o of S.recipes) {
+    if (o.id === r.id) continue;
+    const vs = o.variants.filter((x) => x.dough?.familyId === fid);
+    if (!vs.length) continue;
+    const hit = vs.filter((x) => C.doughSignature(x) === sig);
+    if (hit.length) same.push({ r: o, v: hit[0], partial: hit.length < o.variants.length && o.variants.length > 1 });
+    else diff.push({ r: o, v: vs[0], d: C.doughDiff(v, vs[0]) });
+  }
+  return { fid, same, diff };
+}
+function doughCard(r, v) {
+  const rel = doughRelations(r, v);
+  if (!rel) return '';
+  const link = (x) => `<button class="dough-link" data-act="goto-recipe" data-r="${x.r.id}" data-v="${x.v.id}">${CAT_EMOJI[x.r.category] || '🍞'} ${esc(x.r.name)}${x.partial ? `<span class="muted small">（${esc(x.v.name)}）</span>` : ''}</button>`;
+  return `
+  <div class="card dough-card">
+    <div class="dc-h"><span class="dc-k">生地</span><b>${esc(familyName(v))}</b></div>
+    ${rel.same.length ? `<div class="dc-sub">同じ配合から作れるパン</div><div class="dc-list">${rel.same.map(link).join('')}</div>` : '<div class="muted small">同じ配合のほかのパンはまだありません</div>'}
+    ${rel.diff.length ? `<div class="dc-sub">同じ系統・配合違い</div><div class="dc-list">${rel.diff.map((x) => `${link(x)}<div class="dc-diff">${esc(x.d.slice(0, 3).join('、'))}${x.d.length > 3 ? ' ほか' : ''}</div>`).join('')}</div>` : ''}
   </div>`;
 }
 
@@ -424,13 +456,15 @@ function ingredientsBlock(v, amt, interactive) {
   const show = S.ui.showPct;
   const groups = amt.groups.map((g) => {
     const flourSum = g.kind === 'flour' ? g.rows.reduce((s, r) => s + (r.raw || 0), 0) : 0;
-    const head = `<div class="ig-h"><span>${esc(g.name)}</span>${g.kind === 'flour' ? `<span class="muted small">合計 ${Math.round(flourSum)}g${show ? ' = 100%' : ''}</span>` : ''}</div>`;
+    const head = g.prep ? prepHead(g) : `<div class="ig-h"><span>${esc(g.name)}</span>${g.kind === 'flour' ? `<span class="muted small">合計 ${Math.round(flourSum)}g${show ? ' = 100%' : ''}</span>` : ''}</div>`;
     const rows = g.rows.map((r) => {
       const range = C.fmtRange(r);
       const pct = show && r.pct ? C.fmtPct(r.pct.target) : '';
       const pbx = C.planBranch(v);
       const planTxt = r.byPlan && pbx ? pbx.options.map((o) => `${o.label} ${C.fmtNum(r.byPlan[o.id], r.precision)}g`).join(' ／ ') : '';
-      const sub = [planTxt, range && `幅 ${range}`, r.perCount && `1${esc(v.countUnit || '個')}あたり ${C.fmtPerCount(r.perCount)}`, r.note && esc(r.note)].filter(Boolean).join(' · ');
+      const madeBy = r.madeBy ? amt.groups.find((x) => x.id === r.madeBy) : null;
+      const cookTxt = r.perCook && r.perCook.length > 1 ? r.perCook.map((x, i) => `${i + 1}回目 ${C.fmtNum(x, r.precision)}g`).join(' ／ ') : '';
+      const sub = [planTxt, range && `幅 ${range}`, r.perCount && `1${esc(v.countUnit || '個')}あたり ${C.fmtPerCount(r.perCount)}`, madeBy && `下準備（${esc(madeBy.name)}）で作る`, cookTxt, r.note && esc(r.note)].filter(Boolean).join(' · ');
       return `
       <div class="ig-row">
         <div class="ig-name">${esc(r.name)}${r.tentative ? '<span class="badge b-warn">要確認</span>' : ''}${r.precision === 0.1 ? '<span class="prec" title="0.1g単位で計量">0.1</span>' : ''}</div>
@@ -439,7 +473,7 @@ function ingredientsBlock(v, amt, interactive) {
         ${sub ? `<div class="ig-sub">${sub}</div>` : ''}
       </div>`;
     }).join('');
-    return `<div class="ig ${g.kind}">${head}${rows}</div>`;
+    return `<div class="ig ${g.kind}">${head}${rows}${g.prep ? prepFoot(g) : ''}</div>`;
   }).join('');
   const totals = `<div class="ig-total"><span>生地総量 約${Math.round(amt.dough)}g${amt.piece ? ` ／ 1${esc(v.countUnit || '個')} 約${Math.round(amt.piece)}g` : ''}</span>${amt.hydration != null ? `<span>水分率 約${Math.round(amt.hydration)}%</span>` : ''}</div>`;
   return `
@@ -447,6 +481,16 @@ function ingredientsBlock(v, amt, interactive) {
   <div class="card ing-card">${groups}${totals}</div>
   ${v.hb ? hbCard(v.hb) : ''}
   ${v.tips?.length ? `<div class="card tips"><div class="tips-h">ポイント</div><ul>${v.tips.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}`;
+}
+
+function prepHead(g) {
+  const p = g.prep;
+  return `<div class="ig-h"><span>${esc(g.name)}（下準備）</span></div>
+    <div class="prep-sum"><b>${esc(g.name)}${esc(C.batchLabel(g))}を仕込みます</b>${p.useG ? `<span>使用予定 ${Math.round(p.useG)}g</span>` : ''}</div>`;
+}
+function prepFoot(g) {
+  const y = g.batch?.yieldPerUnit;
+  return `<div class="prep-note">${y ? `仕上がり目安：${g.prep.unit}個分で約${y}g ／ ` : ''}余りが出る場合があります。余った分は冷蔵保存</div>`;
 }
 
 function hbCard(hb) {
@@ -706,6 +750,7 @@ function addTimer(b, s, minutes, { maxMinutes = null, label = null, kind = 'step
   const now = Date.now();
   const t = {
     id: uid('t'), stepId: s.id, kind, label: label || s.timer?.label || s.title,
+    ...(s.parallel ? { parallel: true } : {}),
     durationSec: Math.round(minutes * 60), startedAt: now, endAt: now + minutes * 60000,
     maxEndAt: maxMinutes ? now + maxMinutes * 60000 : null,
     pausedRem: null, firedAt: null, maxFiredAt: null, dismissed: false,
@@ -725,8 +770,8 @@ async function stepNext(b) {
   const now = Date.now();
   const L = (b.progress.log[cur.step.id] ||= {});
   L.doneAt = now;
-  // step timers end with the step (fired or not)
-  b.timers.forEach((t) => { if (t.stepId === cur.step.id && t.kind !== 'custom') t.dismissed = true; });
+  // step timers end with the step (fired or not) — except parallel steps (e.g. chilling custard while the dough is made)
+  b.timers.forEach((t) => { if (t.stepId === cur.step.id && t.kind !== 'custom' && !t.parallel && !cur.step.parallel) t.dismissed = true; });
   b.timers = b.timers.filter((t) => !t.dismissed);
   const n = fl.list[idx + 1];
   if (n) gotoStep(b, n.step.id);
@@ -1082,10 +1127,12 @@ function vEdit(rid, vid) {
             <div class="ed-row"><label class="inline">計量単位 <select data-on="ed" data-f="it:${gi}:${ii}:precision"><option value="1" ${it.precision !== 0.1 ? 'selected' : ''}>1g</option><option value="0.1" ${it.precision === 0.1 ? 'selected' : ''}>0.1g</option></select></label></div>`
           : it.basis === 'flour' ? `<div class="ed-row g3"><label>g${num(`it:${gi}:${ii}:gT`, it._g.target)}</label><label>最小${num(`it:${gi}:${ii}:gMin`, it._g.min, '-')}</label><label>最大${num(`it:${gi}:${ii}:gMax`, it._g.max, '-')}</label></div>
             <div class="ed-row"><label class="inline">計量単位 <select data-on="ed" data-f="it:${gi}:${ii}:precision"><option value="1" ${it.precision !== 0.1 ? 'selected' : ''}>1g</option><option value="0.1" ${it.precision === 0.1 ? 'selected' : ''}>0.1g</option></select></label><label class="inline"><input type="checkbox" data-on="ed" data-f="it:${gi}:${ii}:tentative" ${it.tentative ? 'checked' : ''}>要確認</label></div>`
+          : it.basis === 'batch' ? `<div class="ed-row g3"><label>g（${g.batch?.unit || 1}個分あたり）${num(`it:${gi}:${ii}:bg`, it.g)}</label></div>`
           : it.basis === 'perCount' ? `<div class="ed-row g3"><label>1個g${num(`it:${gi}:${ii}:pcT`, it.perCount.target)}</label><label>最小${num(`it:${gi}:${ii}:pcMin`, it.perCount.min, '-')}</label><label>最大${num(`it:${gi}:${ii}:pcMax`, it.perCount.max, '-')}</label></div>`
           : `<div class="ed-row"><label class="grow">量（文字）${inp(`it:${gi}:${ii}:text`, it.text)}</label></div>`}
           <div class="ed-row">${inp(`it:${gi}:${ii}:note`, it.note, 'placeholder="メモ（任意）"')}</div>
         </div>`).join('')}
+      ${g.kind === 'prep' ? C.prepYieldWarnings(v).filter((w) => w.groupId === g.id).map((w) => `<div class="card warn small">⚠️ ${esc(w.msg)}</div>`).join('') : ''}
       ${g.kind === 'flour' || g.kind === 'dough' ? `<button class="link" data-act="ed-add-item" data-g="${gi}">＋ 材料を追加</button>` : ''}
     </div>`).join('');
 
@@ -1120,7 +1167,8 @@ function vEdit(rid, vid) {
       <label class="fld">分量の表示${inp('var:yieldLabel', v.yieldLabel)}</label>
       ${v.scaleMode === 'count' ? `<label class="fld">基準の個数${num('var:baseCount', v.baseCount)}</label>` : v.scaleMode === 'flour' ? `<label class="fld">基準の個数（分割数・任意）${num('var:baseCount', v.baseCount, 'なし')}</label>` : ''}
       ${v.scaleMode === 'panVolume' ? `<div class="ed-row g3"><label>型 幅cm${num('pan:w', v.basePan.w)}</label><label>奥cm${num('pan:d', v.basePan.d)}</label><label>高cm${num('pan:h', v.basePan.h)}</label></div>` : ''}
-      <label class="fld">焼成の要約${inp('var:bakeSummary', v.bakeSummary)}</label>`)}
+      <label class="fld">焼成の要約${inp('var:bakeSummary', v.bakeSummary)}</label>
+      <label class="fld">生地の系統<select data-on="ed" data-f="var:doughFamily"><option value="">なし</option>${Object.entries(DOUGH_FAMILIES).map(([k, f]) => `<option value="${k}" ${v.dough?.familyId === k ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}${v.dough?.familyId && !DOUGH_FAMILIES[v.dough.familyId] ? `<option value="${esc(v.dough.familyId)}" selected>${esc(familyName(v))}</option>` : ''}</select></label>`)}
     ${section('材料（基準分量のgで入力 → ％に変換して保存）', ingHtml)}
     ${section('工程', `${stepHtml(v.steps)}<button class="link" data-act="ed-add-step">＋ 工程を追加（最後に）</button>`)}
     ${section('変更メモ', `<input data-on="ed" data-f="note" value="${esc(E.note)}" placeholder="例：水＋5g">`)}
@@ -1139,6 +1187,7 @@ function edSet(f, el) {
   const [kind, a, b2, c] = f.split(':');
   if (kind === 'note') E.note = val;
   else if (kind === 'meta') d[a] = val;
+  else if (kind === 'var' && a === 'doughFamily') { if (val) v.dough = { ...(v.dough || {}), familyId: val }; else delete v.dough; }
   else if (kind === 'var') v[a] = a === 'baseCount' ? numv(val) : val;
   else if (kind === 'pan') v.basePan[a] = numv(val);
   else if (kind === 'it') {
@@ -1151,6 +1200,7 @@ function edSet(f, el) {
       case 'gMin': it._g.min = numv(val); break;
       case 'gMax': it._g.max = numv(val); break;
       case 'pcT': it.perCount.target = numv(val); break;
+      case 'bg': it.g = numv(val) ?? 0; break;
       case 'pcMin': it.perCount.min = numv(val); break;
       case 'pcMax': it.perCount.max = numv(val); break;
       default: if (c.startsWith('gp_')) it._gp[c.slice(3)] = numv(val);
@@ -1371,6 +1421,7 @@ const A = {
     await startBake(r, v, el.dataset.p);
   },
   plan: (el) => { S.ui.plan[el.dataset.r] = el.dataset.p; rerender(); },
+  'goto-recipe': (el) => { S.ui.variant[el.dataset.r] = el.dataset.v; go(`#/recipe/${el.dataset.r}`); },
   async 'seed-apply'(el) {
     const r = recipeById(el.dataset.r);
     const fresh = buildSeedRecipes().find((x) => x.id === r.id);
@@ -1403,7 +1454,13 @@ const A = {
     if (fl.list[i + 1]) gotoStep(b, fl.list[i + 1].step.id);
     await saveBake(b); rerender(); window.scrollTo(0, 0);
   },
-  async finish(el) { await finishBake(bakeById(el.dataset.b), 'done'); },
+  async finish(el) {
+    const b = bakeById(el.dataset.b);
+    if (b.timers.some((t) => t.parallel && !t.dismissed)) {
+      if (!confirm('並行タイマーがまだ動いています。タイマーを終了して記録へ進みますか？')) return;
+    }
+    await finishBake(b, 'done');
+  },
   async 't-start'(el) {
     unlockAudio();
     const b = bakeById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);

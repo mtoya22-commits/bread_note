@@ -1,13 +1,23 @@
 // Initial recipes. Written in grams for readability, then normalized to baker's % (the stored truth).
-export const SEED_VERSION = 4;
+export const SEED_VERSION = 5;
+
+// 生地の系統（表示名はここから引く。variant には familyId だけを持たせる）
+export const DOUGH_FAMILIES = {
+  'basic-sweet-dough': { name: '基本の菓子パン生地' },
+};
 
 // ingredient helper: g = number | {target,min,max}
 const I = (id, name, g, o = {}) => ({ id, name, g, ...o });
 
-function normalizeVariant(v) {
+export function normalizeVariant(v) {
   const base = v.baseFlour;
   for (const grp of v.ingredientGroups) {
     for (const it of grp.items) {
+      if (grp.kind === 'prep' && it.basis === 'batch') {
+        // 下準備の材料は「1単位あたりのg」をそのまま持つ。ベーカーズ％にしない
+        it.precision ??= 1;
+        continue;
+      }
       if (it.g != null) {
         const gg = typeof it.g === 'number' ? { target: it.g } : it.g;
         it.basis = 'flour';
@@ -60,43 +70,101 @@ const PAN12_GROUPS = () => ([
 ]);
 
 
-// あんぱん：A（HB）とB（手ごね）は配合を完全共通にする
-const ANPAN_GROUPS = () => ([
-  { id: 'flour', name: '粉', kind: 'flour', items: [I('haru', '春よ恋', 180), I('kitano', 'キタノカオリ', 20)] },
-  { id: 'dough', name: 'その他', kind: 'dough', items: [
-    I('milk', '牛乳', { target: 120, max: 130 }, { moisture: 0.88, note: '硬ければ最大130gまで足す' }),
-    I('egg', '全卵', 20, { moisture: 0.75, note: '溶き卵から取り分け、残りは艶出しに使う' }),
-    I('sugar', '砂糖', 24),
-    I('salt', '塩', 3, { precision: 0.1 }),
-    I('yeast', 'ドライイースト', 2.4, { precision: 0.1 }),
-    I('butter', '無塩バター', 20),
+// ───────────────────────────── 基本の菓子パン生地（あんぱん・クリームパン・チョコ包みパン共通）
+const SWEET_DOUGH_GROUPS = () => ([
+  { id: 'flour', name: '粉', kind: 'flour', items: [
+    I('haru', '春よ恋', 180, { ingKey: 'flour.haruyokoi' }),
+    I('kitano', 'キタノカオリ', 20, { ingKey: 'flour.kitanokaori' }),
   ] },
+  { id: 'dough', name: 'その他', kind: 'dough', items: [
+    I('milk', '牛乳', { target: 120, max: 130 }, { ingKey: 'milk', moisture: 0.88, note: '硬ければ最大130gまで足す' }),
+    I('egg', '全卵', 20, { ingKey: 'egg.whole', moisture: 0.75, note: '溶き卵から取り分け、残りは艶出しに使う' }),
+    I('sugar', '砂糖', 24, { ingKey: 'sugar' }),
+    I('salt', '塩', 3, { ingKey: 'salt', precision: 0.1 }),
+    I('yeast', 'ドライイースト', 2.4, { ingKey: 'yeast.dry', precision: 0.1 }),
+    I('butter', '無塩バター', 20, { ingKey: 'butter.unsalted' }),
+  ] },
+]);
+const EGGWASH = () => ({ id: 'eggwash', name: '艶出し用の溶き卵', text: '適量（生地用の残り）' });
+
+const SWEET_BASE = () => ({
+  scaleMode: 'count', baseCount: 8, countUnit: '個', baseFlour: 200, yieldLabel: '8個分',
+  dough: { familyId: 'basic-sweet-dough' },
+  bakeSummary: '190℃予熱 → 180℃ 12〜15分',
+});
+const SWEET_HB = () => ({
+  mode: 'knead_first_fermentation', recommendation: 'recommended', model: 'siroca SB-2D271', course: 'パン生地コース',
+  capacity: { course: 'パン生地', flourMax: 320 },
+  notes: ['こね〜一次発酵までHB', '塩とイーストが直接重ならないように入れる', 'バターの投入タイミングは機種の指示に従う'],
+});
+
+// HBでこね〜一次発酵（工程IDは p＋番号。あんぱん a1〜a3 は従来IDのまま）
+const HB_DOUGH = (p, n0) => ([
+  { id: `${p}${n0}`, phase: 'dough', title: 'HBへ材料を投入', uses: ['haru', 'kitano', 'milk', 'egg', 'sugar', 'salt', 'yeast'],
+    body: '機種の指示に従う順番で投入する。塩とイーストが直接重ならないようにする。牛乳はまず{{min:milk}}、生地が硬ければ最大{{max:milk}}まで足す。',
+    hb: 'siroca SB-2D271：パン生地コース（こね〜一次発酵）' },
+  { id: `${p}${n0 + 1}`, phase: 'dough', title: 'バターを加える', uses: ['butter'],
+    body: '生地がある程度つながってからバターを加える。投入タイミングは機種の指示に従う。' },
+  { id: `${p}${n0 + 2}`, phase: 'dough', title: '一次発酵の仕上がりを確認',
+    body: 'パン生地コース終了。約2倍がめやす。足りなければ28〜30℃で10〜20分追加する。' },
+]);
+const SWEET_DIVIDE = (p) => ({ id: `${p}-div`, phase: 'divide', title: '分割・ベンチ', body: '{{count}}分割。1個約{{piece}}g。軽く丸めて休ませる。',
+  timer: { min: 15, label: 'ベンチタイム' } });
+const SWEET_PROOF = (p) => ({ id: `${p}-ferm2`, phase: 'proof', title: '二次発酵', body: '時間より生地の状態を優先する。',
+  ferment: { temp: '32〜35℃', tempMin: 32, tempMax: 35, cue: 'ひと回りふっくら・指で軽く触ると柔らかい', min: 40, max: 60 },
+  tips: ['過発酵になると焼成時に横へ広がりやすい', '終盤に190℃で予熱を開始'] });
+const SWEET_BAKE = (p, extraTips = []) => ({ id: `${p}-bake`, phase: 'bake', title: '焼成',
+  body: '190℃で予熱 → 180℃で焼く。12分で焼き色を確認し、濃いきつね色になれば焼き上がり。弱ければ1〜2分追加。',
+  timer: { min: 12, max: 15, label: '焼成 180℃' },
+  bake: { preheat: 190, temp: 180, min: 12, max: 15, steam: false, vessel: 'tray' },
+  ...(extraTips.length ? { tips: extraTips } : {}) });
+const SWEET_COOL = (p, body = '網にのせて冷ます。') => ({ id: `${p}-cool`, phase: 'after', title: '冷ます', body });
+const GLAZE_TIPS = ['塗るのは必要量だけ。厚塗りしない', '（好みで）牛乳少量で薄めて漉すとムラになりにくい'];
+
+// あんぱん
+const ANPAN_GROUPS = () => ([
+  ...SWEET_DOUGH_GROUPS(),
   { id: 'filling', name: 'フィリング', kind: 'filling', items: [
     { id: 'anko', name: 'あんこ', perCount: { target: 35 }, note: '1個35g・冷やしておく' },
   ] },
-  { id: 'finish', name: '仕上げ', kind: 'finish', items: [
-    { id: 'eggwash', name: '艶出し用の溶き卵', text: '適量（生地用の残り）' },
-    { id: 'sesame', name: '黒ごま・けしの実', text: '好みで' },
-  ] },
+  { id: 'finish', name: '仕上げ', kind: 'finish', items: [EGGWASH(), { id: 'sesame', name: '黒ごま', text: '少量' }] },
 ]);
-
-// 分割から焼成までは A/B 共通
-const ANPAN_COMMON = (p) => ([
-  { id: `${p}-div`, title: '分割・ベンチ', body: '{{count}}分割。1個約{{piece}}g。軽く丸めて休ませる。',
-    timer: { min: 15, label: 'ベンチタイム' } },
-  { id: `${p}-wrap`, title: 'あんこを包む', uses: ['anko'],
+const ANPAN_PREP = (id) => ({ id, phase: 'prep', title: 'あんこを準備', uses: ['anko'],
+  body: 'あんこを{{count}}等分して丸め（1個{{per:anko}}）、冷蔵庫で冷やしておく。柔らかいあんこほど、冷やした方が包みやすい。' });
+const ANPAN_AFTER = (p) => ([
+  SWEET_DIVIDE(p),
+  { id: `${p}-wrap`, phase: 'shape', title: 'あんこを包む', uses: ['anko'],
     body: '生地を中央がやや厚く、周囲が薄くなるように直径10cm前後へ伸ばす。中央にあんこ{{per:anko}}を置き、周囲の生地を集めてしっかり閉じる。閉じ目を下にして、手のひらで軽く押さえて平たく整える。',
     tips: ['閉じ目付近にあんこを付けない', '平たく整えると焼成中に転がりにくく、底も浮きにくい'] },
-  { id: `${p}-ferm2`, title: '二次発酵', body: '時間より生地の状態を優先する。',
-    ferment: { temp: '32〜35℃', cue: 'ひと回りふっくら・指で軽く触ると柔らかい', min: 40, max: 60 },
-    tips: ['過発酵になると焼成時に横へ広がりやすい', '終盤に190℃で予熱を開始'] },
-  { id: `${p}-glaze`, title: '仕上げ', uses: ['eggwash', 'sesame'],
-    body: '表面に溶き卵を薄く塗り、好みで黒ごままたはけしの実を中央に少量のせる。',
-    tips: ['塗るのは必要量だけ。厚塗りしない', '（好みで）牛乳少量で薄めて漉すとムラになりにくい'] },
-  { id: `${p}-bake`, title: '焼成', body: '190℃で予熱 → 180℃で焼く。12分で焼き色を確認し、濃いきつね色になれば焼き上がり。弱ければ1〜2分追加。',
-    timer: { min: 12, max: 15, label: '焼成 180℃' } },
-  { id: `${p}-cool`, title: '冷ます', body: '網にのせて冷ます。' },
+  SWEET_PROOF(p),
+  { id: `${p}-glaze`, phase: 'top', title: '艶出し・黒ごま', uses: ['eggwash', 'sesame'],
+    body: '表面に溶き卵を薄く塗り、中央に黒ごまを少量のせる。',
+    tips: [...GLAZE_TIPS, '黒ごまは、ほかの菓子パンと同じ天板で焼くときの目印にもなる'] },
+  SWEET_BAKE(p),
+  SWEET_COOL(p),
 ]);
+const ANPAN_TIPS = [
+  '基準は粉200g・8個（生地 約49g＋あんこ35g）',
+  '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
+  '閉じ目付近にあんこを付けない',
+  'あん多めが好みなら40gまで増やせる',
+  '40gにする場合は、中央を残して周囲をやや薄く大きく伸ばす',
+  '黒ごまは、ほかの菓子パンと同じ天板で焼くときの目印にもなる',
+];
+
+// クリームパン：カスタードは 4個分を1単位として切り上げ、1回に炊くのは最大8個分
+const CUSTARD_PREP = () => ({
+  id: 'custard', name: 'カスタード', kind: 'prep', prepKey: 'custard-basic',
+  batch: { unit: 4, maxUnitsPerCook: 2, yieldPerUnit: 145 },
+  items: [
+    { id: 'cu-milk', name: '牛乳', basis: 'batch', g: 110, ingKey: 'milk' },
+    { id: 'cu-yolk', name: '卵黄', basis: 'batch', g: 20, ingKey: 'egg.yolk', note: '卵1個分' },
+    { id: 'cu-sugar', name: '砂糖', basis: 'batch', g: 25, ingKey: 'sugar' },
+    { id: 'cu-starch', name: 'コーンスターチ', basis: 'batch', g: 10, ingKey: 'cornstarch' },
+    { id: 'cu-butter', name: '無塩バター', basis: 'batch', g: 5, ingKey: 'butter.unsalted' },
+    { id: 'cu-vanilla', name: 'バニラ', basis: 'text', text: '少量' },
+  ],
+});
 
 export function buildSeedRecipes() {
   return [
@@ -235,80 +303,158 @@ export function buildSeedRecipes() {
       }],
     }),
 
-    // ───────────────────────────── あんぱん
+    // ───────────────────────────── あんぱん（rev2：黒ごま標準・共通生地の部品化）
     recipe({
       id: 'anpan',
-      seedRev: 1,
+      seedRev: 2,
       name: '基本のあんぱん',
       category: '菓子パン',
       difficulty: 2,
       tags: ['当日完成', 'HB使用可', 'あんぱん'],
-      description: '春よ恋90%＋キタノカオリ10%の、ふわっと柔らかく少しもちっとした生地。あんこは1個35g。A（HB）とB（手ごね）は配合が同じ。',
+      description: '基本の菓子パン生地（春よ恋90%＋キタノカオリ10%）で作る定番のあんぱん。あんこ35g・中央に黒ごま。A（HB）とB（手ごね）は配合が同じ。',
       variants: [
         {
           id: 'hb', name: 'A. HBこね〜一次発酵',
-          scaleMode: 'count', baseCount: 8, countUnit: '個', baseFlour: 200,
-          yieldLabel: '8個分',
+          ...SWEET_BASE(),
           timeLabel: '約3〜3.5時間',
-          hb: { mode: 'knead_first_fermentation', recommendation: 'recommended', model: 'siroca SB-2D271', course: 'パン生地コース',
-            notes: ['こね〜一次発酵までHB', '塩とイーストが直接重ならないように入れる', 'バターの投入タイミングは機種の指示に従う'] },
-          bakeSummary: '190℃予熱 → 180℃ 12〜15分',
+          hb: SWEET_HB(),
           ingredientGroups: ANPAN_GROUPS(),
-          steps: [
-            { id: 'a0', title: 'あんこを準備', uses: ['anko'],
-              body: 'あんこを{{count}}等分して丸め（1個{{per:anko}}）、冷蔵庫で冷やしておく。柔らかいあんこほど、冷やした方が包みやすい。' },
-            { id: 'a1', title: 'HBへ材料を投入', uses: ['haru', 'kitano', 'milk', 'egg', 'sugar', 'salt', 'yeast'],
-              body: '機種の指示に従う順番で投入する。塩とイーストが直接重ならないようにする。牛乳はまず{{min:milk}}、生地が硬ければ最大{{max:milk}}まで足す。',
-              hb: 'siroca SB-2D271：パン生地コース（こね〜一次発酵）' },
-            { id: 'a2', title: 'バターを加える', uses: ['butter'],
-              body: '生地がある程度つながってからバターを加える。投入タイミングは機種の指示に従う。' },
-            { id: 'a3', title: '一次発酵の仕上がりを確認',
-              body: 'パン生地コース終了。約2倍がめやす。足りなければ28〜30℃で10〜20分追加する。' },
-            ...ANPAN_COMMON('a'),
-          ],
-          tips: [
-            '基準は粉200g・8個（生地 約49g＋あんこ35g）',
-            '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
-            '閉じ目付近にあんこを付けない',
-            'B（手ごね）とは配合・焼成が同じ。違うのはこね方と一次発酵の環境',
-          ],
+          steps: [ANPAN_PREP('a0'), ...HB_DOUGH('a', 1), ...ANPAN_AFTER('a')],
+          tips: [...ANPAN_TIPS, 'B（手ごね）とは配合・焼成が同じ。違うのはこね方と一次発酵の環境'],
         },
         {
           id: 'hand', name: 'B. 手ごね',
-          scaleMode: 'count', baseCount: 8, countUnit: '個', baseFlour: 200,
-          yieldLabel: '8個分',
+          ...SWEET_BASE(),
           timeLabel: '約3〜3.5時間',
           hb: { mode: 'none', label: '手ごね', recommendation: 'not_recommended', model: '', course: '', notes: ['手ごね（HBは使わない）'] },
-          bakeSummary: '190℃予熱 → 180℃ 12〜15分',
           ingredientGroups: ANPAN_GROUPS(),
           steps: [
-            { id: 'h0', title: 'あんこを準備', uses: ['anko'],
-              body: 'あんこを{{count}}等分して丸め（1個{{per:anko}}）、冷蔵庫で冷やしておく。柔らかいあんこほど、冷やした方が包みやすい。' },
-            { id: 'h1', title: '材料を混ぜる', uses: ['haru', 'kitano', 'sugar', 'salt', 'yeast', { ref: 'milk', show: 'min' }, 'egg'],
+            ANPAN_PREP('h0'),
+            { id: 'h1', phase: 'dough', title: '材料を混ぜる', uses: ['haru', 'kitano', 'sugar', 'salt', 'yeast', { ref: 'milk', show: 'min' }, 'egg'],
               body: 'ボウルに粉2種・砂糖・塩・ドライイーストを入れる（塩の上にイーストを置かない）。牛乳{{min:milk}}と溶き卵{{g:egg}}を加え、粉気がなくなるまで混ぜる。硬ければ牛乳を最大{{max:milk}}まで足す。バターはまだ入れない。' },
-            { id: 'h2', title: '休ませる', body: 'ラップをして休ませる。水分をなじませて手ごねを楽にするための時間。',
+            { id: 'h2', phase: 'dough', title: '休ませる', body: 'ラップをして休ませる。水分をなじませて手ごねを楽にするための時間。',
               timer: { min: 5, max: 10, label: '水分をなじませる' } },
-            { id: 'h3', title: '一次こね', body: '台に出してこねる。生地がつながり、表面が少し滑らかになったら次へ。',
+            { id: 'h3', phase: 'dough', title: '一次こね', body: '台に出してこねる。生地がつながり、表面が少し滑らかになったら次へ。',
               timer: { min: 5, max: 8, label: '一次こね' } },
-            { id: 'h4', title: 'バターを加える', uses: ['butter'], body: '柔らかくした無塩バターを加え、そのままこね続ける。',
+            { id: 'h4', phase: 'dough', title: 'バターを加える', uses: ['butter'], body: '柔らかくした無塩バターを加え、そのままこね続ける。',
               tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
-            { id: 'h5', title: '本ごね', body: '時間より生地の状態で判断する。薄く伸ばすと指が透ける膜ができればOK。',
+            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。薄く伸ばすと指が透ける膜ができればOK。',
               timer: { min: 8, max: 15, label: '本ごね' } },
-            { id: 'h6', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
+            { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳の温度を下げる'] },
-            { id: 'h7', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
-              ferment: { temp: '28〜30℃', cue: '約2倍', min: 60, max: 90 } },
-            ...ANPAN_COMMON('h'),
+            { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
+              ferment: { temp: '28〜30℃', tempMin: 28, tempMax: 30, cue: '約2倍', min: 60, max: 90 } },
+            ...ANPAN_AFTER('h'),
           ],
           tips: [
             '配合・焼成はAと同じ。違うのはこね方と一次発酵の環境',
-            '基準は粉200g・8個（生地 約49g＋あんこ35g）',
             'こね上がり生地温 26〜28℃が目安',
             '本ごねは時間より膜の状態を優先',
-            '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
+            ...ANPAN_TIPS,
           ],
         },
       ],
+    }),
+
+    // ───────────────────────────── クリームパン
+    recipe({
+      id: 'cream-pan',
+      seedRev: 1,
+      name: '基本のクリームパン',
+      category: '菓子パン',
+      difficulty: 3,
+      tags: ['当日完成', 'HB使用可', 'クリームパン', '自家製カスタード'],
+      description: '基本の菓子パン生地に、自家製カスタード35gを包むグローブ型。',
+      variants: [{
+        id: 'hb', name: 'HBこね〜一次発酵',
+        ...SWEET_BASE(),
+        timeLabel: '約3.5〜4時間',
+        timeNote: 'カスタードを前日に用意しておけば約3〜3.5時間',
+        hb: SWEET_HB(),
+        ingredientGroups: [
+          ...SWEET_DOUGH_GROUPS(),
+          CUSTARD_PREP(),
+          { id: 'filling', name: 'フィリング', kind: 'filling', items: [
+            { id: 'custard', name: 'カスタード', perCount: { target: 35 }, madeBy: 'custard', note: '1個35g・冷えたものを使う' },
+          ] },
+          { id: 'finish', name: '仕上げ', kind: 'finish', items: [EGGWASH()] },
+        ],
+        steps: [
+          { id: 'cp0', phase: 'prep', title: 'カスタードを炊く', uses: ['cu-milk', 'cu-yolk', 'cu-sugar', 'cu-starch', 'cu-butter', 'cu-vanilla'],
+            body: 'カスタードを{{batch:custard}}炊く。卵黄と砂糖を混ぜ、コーンスターチを加える。温めた牛乳を少しずつ加えて鍋に戻し、混ぜながら加熱する。しっかり沸騰してとろみが付いてから約30秒加熱し、火を止めてバターとバニラを混ぜる。' },
+          { id: 'cp1', phase: 'prep', parallel: true, title: 'カスタードを冷やす',
+            body: 'バットに薄く広げ、表面にラップを密着させて、包める硬さまで冷やす。冷やしている間に生地作りを始めてよい（タイマーは次の工程に進んでも動き続ける）。',
+            timer: { min: 30, max: 60, label: 'カスタードを冷やす' } },
+          ...HB_DOUGH('cp', 2),
+          SWEET_DIVIDE('cp'),
+          { id: 'cp-shape', phase: 'shape', title: 'カスタードを包む・グローブ型', uses: ['custard'],
+            body: '生地を楕円形に伸ばす（中央はやや厚く、縁は少し薄め）。冷えたカスタード{{per:custard}}を置いて半月形に二つ折りにし、縁をしっかり閉じる。丸い側から4〜5本の切り込みを入れてグローブ型にする。',
+            tips: ['閉じ目にカスタードを付けない', '切り込みはカスタードまで届かせない', '冷やしたカスタードは練り直しすぎない（へらで軽くほぐす程度）'] },
+          SWEET_PROOF('cp'),
+          { id: 'cp-glaze', phase: 'top', title: '艶出し', uses: ['eggwash'], body: '表面に溶き卵を薄く塗る。', tips: GLAZE_TIPS },
+          SWEET_BAKE('cp', ['12分で切り込み部分の焼き色を確認']),
+          SWEET_COOL('cp', '網にのせて冷ます。カスタード入りは当日中に食べるのが基本。残りは冷蔵保存。'),
+        ],
+        tips: [
+          '基準は粉200g・8個（生地 約49g＋カスタード35g）',
+          'カスタードは4個分単位で仕込む（1回に炊くのは最大8個分）',
+          '冷えたカスタードは練り直しすぎない。へらで軽くほぐす程度',
+          '閉じ目にカスタードを付けない',
+          '切り込みはカスタードまで届かせない',
+          '12分で切り込み部分の焼き色を確認',
+          'カスタード入りは当日中を基本に。残りは冷蔵保存',
+          '余ったカスタードは冷蔵で翌日まで',
+          '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
+          '手ごねの場合は、菓子パン生地の手ごね手順（混合→休ませ→一次こね→バター→本ごね→生地温26〜28℃）で',
+        ],
+      }],
+    }),
+
+    // ───────────────────────────── チョコ包みパン
+    recipe({
+      id: 'choco-pan',
+      seedRev: 1,
+      name: '基本のチョコ包みパン',
+      category: '菓子パン',
+      difficulty: 2,
+      tags: ['当日完成', 'HB使用可', 'チョコ'],
+      description: '基本の菓子パン生地に、チョコ18gを包むプレーンな丸型。',
+      variants: [{
+        id: 'hb', name: 'HBこね〜一次発酵',
+        ...SWEET_BASE(),
+        timeLabel: '約3〜3.5時間',
+        hb: SWEET_HB(),
+        ingredientGroups: [
+          ...SWEET_DOUGH_GROUPS(),
+          { id: 'filling', name: 'フィリング', kind: 'filling', items: [
+            { id: 'choco', name: '焼成用チョコ（または板チョコ）', perCount: { target: 18, min: 15, max: 20 }, note: '2〜3片にまとめる' },
+          ] },
+          { id: 'finish', name: '仕上げ', kind: 'finish', items: [EGGWASH()] },
+        ],
+        steps: [
+          { id: 'ch0', phase: 'prep', title: 'チョコを分ける', uses: ['choco'],
+            body: 'チョコを{{count}}等分（1個{{per:choco}}）に分け、板状なら2〜3片程度にまとめる。細かく砕きすぎない。' },
+          ...HB_DOUGH('ch', 1),
+          SWEET_DIVIDE('ch'),
+          { id: 'ch-wrap', phase: 'shape', title: 'チョコを包む', uses: ['choco'],
+            body: '生地を円形に伸ばす（中央はやや厚く、周囲は少し薄め）。中央にチョコを置き、周囲の生地を集めてしっかり閉じる。閉じ目を下にして丸く整え、手のひらでごく軽く押さえて安定させる。',
+            tips: ['チョコを閉じ目に挟まない'] },
+          SWEET_PROOF('ch'),
+          { id: 'ch-glaze', phase: 'top', title: '艶出し', uses: ['eggwash'], body: '表面に溶き卵を薄く塗る。トッピングはしない（プレーンの丸型）。', tips: GLAZE_TIPS },
+          SWEET_BAKE('ch'),
+          SWEET_COOL('ch', '網にのせて冷ます。焼きたては中のチョコが熱いので少し冷ましてから。'),
+        ],
+        tips: [
+          '基準は粉200g・8個（生地 約49g＋チョコ18g）',
+          '焼成用チョコ、または市販の板チョコが標準',
+          'クーベルチュールは溶けて漏れやすい',
+          'チョコを閉じ目に挟まない',
+          '焼きたては中のチョコが熱いので少し冷ましてから',
+          'チョコチップを生地に練り込む方式にはしない（生地が変わるため）',
+          '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
+          '手ごねの場合は、菓子パン生地の手ごね手順（混合→休ませ→一次こね→バター→本ごね→生地温26〜28℃）で',
+        ],
+      }],
     }),
 
     // ───────────────────────────── 食パン（2 variants）
@@ -439,9 +585,11 @@ export function buildSeedRecipes() {
 /** Non-destructive upgrades for data already saved on the device. */
 export function migrateRecipes(recipes, fromVersion) {
   const changed = [];
+  // 破壊的な置き換えより前に「ユーザーが編集したか」を判定しておく
+  const edited = (r) => (r.userEdited != null ? !!r.userEdited : inferUserEdited(r));
   if (fromVersion < 2) {
     const r = recipes.find((x) => x.id === 'rodev-90');
-    const v = r?.variants.find((x) => x.id === 'std');
+    const v = r && !edited(r) ? r.variants.find((x) => x.id === 'std') : null;
     if (v) {
       let touched = false;
       if (v.baseCount == null) { v.baseCount = 2; v.countUnit = '個'; touched = true; }
@@ -456,7 +604,8 @@ export function migrateRecipes(recipes, fromVersion) {
   if (fromVersion < 3) {
     // ロデヴ確定版：作り始めに当日／冷蔵を選び、イースト量を切り替える。追加モルトなし。
     const i = recipes.findIndex((x) => x.id === 'rodev-90');
-    if (i >= 0) {
+    // 編集済みのロデヴは置き換えない（後で「新しい標準版があります」として提案される）
+    if (i >= 0 && !edited(recipes[i])) {
       const old = recipes[i];
       const fresh = buildSeedRecipes().find((x) => x.id === 'rodev-90');
       fresh.favorite = old.favorite;
@@ -471,7 +620,68 @@ export function migrateRecipes(recipes, fromVersion) {
       if (j >= 0) changed.splice(j, 1);
     }
   }
+  if (fromVersion < 5) {
+    // 中身を変えないメタデータの追加（seedRev は上げない）
+    const seeds = buildSeedRecipes();
+    for (const r of recipes) {
+      const sr = seeds.find((x) => x.id === r.id);
+      if (!sr) continue;
+      let touched = false;
+      for (const v of r.variants || []) {
+        const sv = sr.variants.find((x) => x.id === v.id);
+        if (!sv) continue;
+        if (sv.dough && !v.dough) { v.dough = { ...sv.dough }; touched = true; }
+        // 材料キー（配合の指紋用）：同じ id・同じ名前の材料にだけ付ける
+        for (const g of v.ingredientGroups || []) {
+          const sg = sv.ingredientGroups.find((x) => x.id === g.id);
+          if (!sg) continue;
+          for (const it of g.items) {
+            const si = sg.items.find((x) => x.id === it.id);
+            if (si?.ingKey && !it.ingKey && norm(si.name) === norm(it.name)) { it.ingKey = si.ingKey; touched = true; }
+          }
+        }
+        if (applyStepMeta(v, sv)) touched = true;
+      }
+      if (touched && !changed.includes(r)) changed.push(r);
+    }
+  }
   return changed;
+}
+
+const norm = (x) => String(x ?? '').normalize('NFKC').replace(/\s+/g, '');
+
+/* phase などの工程メタデータは、工程IDの並びと構造化値が標準版と完全一致する variant にだけ、全工程まとめて付ける */
+function flatSteps(steps, out = []) {
+  for (const s of steps || []) {
+    out.push(s);
+    if (s.type === 'branch') for (const o of s.options || []) flatSteps(o.steps, out);
+  }
+  return out;
+}
+function stepStruct(s) {
+  // 見出しと構造化された値を比べる（本文 body の言い回しは無視）
+  const f = s.ferment ? { temp: s.ferment.temp ?? null, min: s.ferment.min ?? null, max: s.ferment.max ?? null, cue: s.ferment.cue ?? null } : null;
+  const t = s.timer ? { min: s.timer.min ?? null, max: s.timer.max ?? null } : null;
+  const c = s.cold ? { minH: s.cold.minH ?? null, maxH: s.cold.maxH ?? null } : null;
+  const b = s.type === 'branch' ? { atStart: !!s.atStart, options: (s.options || []).map((o) => o.id) } : null;
+  return JSON.stringify({ type: s.type || 'step', title: s.title ?? null, t, f, c, b });
+}
+const META_KEYS = ['phase', 'parallel', 'bake'];
+export function applyStepMeta(v, sv) {
+  const A = flatSteps(v.steps), B = flatSteps(sv.steps);
+  if (!B.some((s) => s.phase)) return false;                       // 標準版にメタデータがない
+  if (A.every((s) => s.type === 'branch' || s.phase)) return false; // もう付いている
+  if (A.length !== B.length || A.some((s, i) => s.id !== B[i].id)) return false;
+  if (A.some((s, i) => stepStruct(s) !== stepStruct(B[i]))) return false;
+  A.forEach((s, i) => {
+    const src = B[i];
+    for (const k of META_KEYS) if (src[k] != null && s[k] == null) s[k] = JSON.parse(JSON.stringify(src[k]));
+    if (s.ferment && src.ferment) {
+      if (src.ferment.tempMin != null && s.ferment.tempMin == null) s.ferment.tempMin = src.ferment.tempMin;
+      if (src.ferment.tempMax != null && s.ferment.tempMax == null) s.ferment.tempMax = src.ferment.tempMax;
+    }
+  });
+  return true;
 }
 
 /** Did the user change this recipe after it last came from the standard (seed) version? */

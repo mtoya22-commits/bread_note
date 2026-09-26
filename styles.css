@@ -487,3 +487,18 @@ textarea.next-memo { background: var(--accent-soft); border-color: transparent; 
 .seed-btns .btn { flex: 1; font-size: 14px; }
 .plan-card { padding: 4px 0; }
 .pc-h { padding: 10px 14px 6px; font-weight: 800; color: var(--cold); font-size: 17px; }
+
+/* v1.1.0: prep batches, dough card */
+.prep-sum { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px; background: var(--accent-soft); color: var(--brown); border-radius: 10px; padding: 8px 10px; margin: 4px 0 6px; font-size: 14px; }
+.prep-sum span { color: var(--accent-2); font-weight: 700; }
+.prep-note { font-size: 12px; color: var(--muted); padding: 4px 0 8px; }
+.time-note { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.cap-warn { margin-top: 10px; font-size: 13.5px; }
+.dough-card { margin-top: 12px; }
+.dc-h { display: flex; align-items: baseline; gap: 8px; color: var(--brown); }
+.dc-k { font-size: 11px; font-weight: 800; letter-spacing: .08em; color: var(--accent-2); background: var(--accent-soft); padding: 1px 8px; border-radius: 999px; }
+.dc-sub { font-size: 12px; font-weight: 800; color: var(--brown-2); margin: 10px 0 4px; }
+.dc-list { display: flex; flex-direction: column; gap: 2px; }
+.dough-link { text-align: left; padding: 8px 10px; border-radius: 10px; background: var(--beige); font-weight: 700; color: var(--brown); font-size: 14.5px; }
+.dough-link:active { filter: brightness(.95); }
+.dc-diff { font-size: 12px; color: var(--muted); padding: 0 10px 6px; }
