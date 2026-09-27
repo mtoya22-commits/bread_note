@@ -502,3 +502,12 @@ textarea.next-memo { background: var(--accent-soft); border-color: transparent; 
 .dough-link { text-align: left; padding: 8px 10px; border-radius: 10px; background: var(--beige); font-weight: 700; color: var(--brown); font-size: 14.5px; }
 .dough-link:active { filter: brightness(.95); }
 .dc-diff { font-size: 12px; color: var(--muted); padding: 0 10px 6px; }
+.dc-row { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; }
+.dc-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 4px; }
+.dc-chip { font-size: 11.5px; line-height: 1.4; padding: 2px 8px; border-radius: 10px; background: var(--beige); color: var(--text); border: 1px solid var(--line); }
+.dc-chip.c-ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.dc-chip.c-ng { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.dc-chip.c-unknown, .dc-chip.c-off { color: var(--muted); }
+.dc-chip.c-note { color: var(--brown-2); }
+.dc-sub.dc-same { color: var(--ok); }
+.dc-foot { font-size: 11px; color: var(--muted); margin-top: 8px; }

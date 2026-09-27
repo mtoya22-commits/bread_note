@@ -1,9 +1,14 @@
 // Initial recipes. Written in grams for readability, then normalized to baker's % (the stored truth).
-export const SEED_VERSION = 5;
+import { doughSignature } from './calc.js';
+
+export const SEED_VERSION = 7;
 
 // 生地の系統（表示名はここから引く。variant には familyId だけを持たせる）
 export const DOUGH_FAMILIES = {
   'basic-sweet-dough': { name: '基本の菓子パン生地' },
+  'lean-high-hydration': { name: 'リーン・高加水' },
+  'rich-shokupan': { name: 'リッチ食パン生地' },
+  'curry-bread-dough': { name: 'カレーパン生地' },
 };
 
 // ingredient helper: g = number | {target,min,max}
@@ -47,10 +52,13 @@ function recipe(r) {
   };
 }
 
+// 2段焼成は焼成工程を2つ持つ（1段目の時間は温度を切り替える時刻なので、同時製作の判定にも使う）
 const RODEV_BAKE = (p) => [
-  { id: `${p}-bake1`, title: '焼成①', body: '250℃・スチームあり。', timer: { min: 10, label: '焼成① 250℃' } },
-  { id: `${p}-bake2`, title: '焼成②', body: '蒸気を抜き、230℃に下げて焼く。焼き色を見て15〜18分。', timer: { min: 15, max: 18, label: '焼成② 230℃' } },
-  { id: `${p}-cool`, title: '冷ます', body: '網の上で完全に冷ます。断面は冷めてから。' },
+  { id: `${p}-bake1`, phase: 'bake', title: '焼成①', body: '250℃・スチームあり。', timer: { min: 10, label: '焼成① 250℃' },
+    bake: { method: 'oven', preheat: 250, temp: 250, min: 10, max: 10, steam: true } },
+  { id: `${p}-bake2`, phase: 'bake', title: '焼成②', body: '蒸気を抜き、230℃に下げて焼く。焼き色を見て15〜18分。', timer: { min: 15, max: 18, label: '焼成② 230℃' },
+    bake: { method: 'oven', temp: 230, min: 15, max: 18, steam: false } },
+  { id: `${p}-cool`, phase: 'after', title: '冷ます', body: '網の上で完全に冷ます。断面は冷めてから。' },
 ];
 
 // 12cm角型の2バリエーション（B: HB＋型 / C: 手ごね＋型）は配合を完全共通にする
@@ -111,12 +119,12 @@ const HB_DOUGH = (p, n0) => ([
 const SWEET_DIVIDE = (p) => ({ id: `${p}-div`, phase: 'divide', title: '分割・ベンチ', body: '{{count}}分割。1個約{{piece}}g。軽く丸めて休ませる。',
   timer: { min: 15, label: 'ベンチタイム' } });
 const SWEET_PROOF = (p) => ({ id: `${p}-ferm2`, phase: 'proof', title: '二次発酵', body: '時間より生地の状態を優先する。',
-  ferment: { temp: '32〜35℃', tempMin: 32, tempMax: 35, cue: 'ひと回りふっくら・指で軽く触ると柔らかい', min: 40, max: 60 },
+  ferment: { temp: '32〜35℃', tempMode: 'range', tempMin: 32, tempMax: 35, cue: 'ひと回りふっくら・指で軽く触ると柔らかい', min: 40, max: 60 },
   tips: ['過発酵になると焼成時に横へ広がりやすい', '終盤に190℃で予熱を開始'] });
 const SWEET_BAKE = (p, extraTips = []) => ({ id: `${p}-bake`, phase: 'bake', title: '焼成',
   body: '190℃で予熱 → 180℃で焼く。12分で焼き色を確認し、濃いきつね色になれば焼き上がり。弱ければ1〜2分追加。',
   timer: { min: 12, max: 15, label: '焼成 180℃' },
-  bake: { preheat: 190, temp: 180, min: 12, max: 15, steam: false, vessel: 'tray' },
+  bake: { method: 'oven', preheat: 190, temp: 180, min: 12, max: 15, steam: false, vessel: 'tray' },
   ...(extraTips.length ? { tips: extraTips } : {}) });
 const SWEET_COOL = (p, body = '網にのせて冷ます。') => ({ id: `${p}-cool`, phase: 'after', title: '冷ます', body });
 const GLAZE_TIPS = ['塗るのは必要量だけ。厚塗りしない', '（好みで）牛乳少量で薄めて漉すとムラになりにくい'];
@@ -186,6 +194,7 @@ export function buildSeedRecipes() {
           notes: ['使用する場合「こねる」5分', '生地が硬ければ水を少量追加', '必要ならさらに2分', '発酵機能は使用しない'],
         },
         bakeSummary: '170〜175℃で揚げ 3〜4分',
+        dough: { familyId: 'curry-bread-dough' },
         ingredientGroups: [
           { id: 'flour', name: '基準粉', kind: 'flour', items: [
             I('haru', '春よ恋', 100), I('kitano', 'キタノカオリ', 20), I('lys', 'リスドォル', 15), I('tapioca', 'タピオカ粉', 15),
@@ -209,24 +218,26 @@ export function buildSeedRecipes() {
           ] },
         ],
         steps: [
-          { id: 'c1', title: 'カレーを固く・冷たくする', uses: ['curry'],
+          { id: 'c1', phase: 'prep', title: 'カレーを固く・冷たくする', uses: ['curry'],
             body: 'カレーを煮詰め、流れない硬さにする。{{count}}等分して1本{{per:curry}}。細長い俵型にして冷蔵庫でしっかり冷やす。' },
-          { id: 'c2', title: '生地を作る',
+          { id: 'c2', phase: 'dough', title: '生地を作る',
             uses: ['haru', 'kitano', 'lys', 'tapioca', 'sugar', 'salt', 'bp', 'skim', 'egg', { ref: 'water', show: 'min' }, 'oil'],
             body: '粉類、砂糖、塩、ベーキングパウダー、スキムミルクを混ぜる。卵・油・水{{min:water}}を加え、5〜7分こねる。硬い場合だけ残りの水を少量ずつ加える（合計最大{{max:water}}）。',
             hb: 'HB使用時：「こねる」5分 → 硬ければ水を少量追加 → 必要ならさらに2分。発酵機能は使わない。',
             timer: { min: 5, max: 7, label: 'こね' } },
-          { id: 'c3', title: '休ませる', body: 'ラップをして室温で休ませる。これは発酵ではなく、生地を伸ばしやすくするため。30分を大きく超えて休ませない。',
+          { id: 'c3', phase: 'dough', title: '休ませる', body: 'ラップをして室温で休ませる。これは発酵ではなく、生地を伸ばしやすくするため。30分を大きく超えて休ませない。',
             timer: { min: 20, max: 30, label: '生地を休ませる' } },
-          { id: 'c4', title: '分割・伸ばす',
+          { id: 'c4', phase: 'divide', title: '分割・伸ばす',
             body: '{{count}}等分。1個約{{piece}}gを目安にする。長さ15〜17cm、幅8〜9cm程度の楕円に伸ばす。中央は少し厚め、端は薄め。' },
-          { id: 'c5', title: '包む', uses: ['curry'],
+          { id: 'c5', phase: 'shape', title: '包む', uses: ['curry'],
             body: '冷たいカレーを中央に置き、長辺同士を合わせて強くつまむ。両端も完全に閉じ、長さ約15cmの俵型に整える。',
             tips: ['閉じ目に打ち粉や油を付けない'] },
-          { id: 'c6', title: '衣', uses: ['cwater', 'panko'],
+          { id: 'c6', phase: 'top', title: '衣', uses: ['cwater', 'panko'],
             body: '表面を水で軽く湿らせ、細目パン粉を薄くまぶす。閉じ目は特にしっかり密着させる。',
             tips: ['薄皮感を残すためパン粉も薄くする'] },
-          { id: 'c7', title: '揚げる', uses: ['fryoil'],
+          // 揚げも phase は「焼成」。加熱方法を method: 'fry' で区別する
+          { id: 'c7', phase: 'bake', title: '揚げる', uses: ['fryoil'],
+            bake: { method: 'fry', tempMin: 170, tempMax: 175, min: 3, max: 4, steam: false },
             body: '170〜175℃。閉じ目を下にして入れ、途中で返しながら揚げる。全体がきつね色になったら取り出す。',
             tips: ['冷たいカレーを包むため、揚げ上がりでも中心が熱々にならない場合がある', '熱々で食べたい場合は食べる直前に軽く温め直す'],
             timer: { min: 3, max: 4, label: '揚げ' } },
@@ -250,6 +261,7 @@ export function buildSeedRecipes() {
         yieldLabel: '2個分',
         hb: { mode: 'none', recommendation: 'not_recommended', model: '', course: '', notes: ['HB非推奨', '使用する場合は初期混合5分のみ'] },
         bakeSummary: '250℃スチーム 10分 → 230℃ 15〜18分',
+        dough: { familyId: 'lean-high-hydration' },
         ingredientGroups: [
           { id: 'flour', name: '粉', kind: 'flour', items: [
             I('lys', 'リスドォル', 150), I('kitano', 'キタノカオリ', 75), I('haru', '春よ恋', 25),
@@ -261,33 +273,34 @@ export function buildSeedRecipes() {
           ] },
         ],
         steps: [
-          { id: 'r1', title: '粉と水を混ぜる', uses: ['lys', 'kitano', 'haru', { ref: 'water', pctOfFlour: 84, label: '水（最初）' }],
+          { id: 'r1', phase: 'dough', title: '粉と水を混ぜる', uses: ['lys', 'kitano', 'haru', { ref: 'water', pctOfFlour: 84, label: '水（最初）' }],
             body: '粉3種と水{{part:water:84}}を、粉気がなくなるまで混ぜる。残りの水はまだ入れない。' },
-          { id: 'r2', title: 'オートリーズ', body: 'ラップをして休ませる。', timer: { min: 20, label: 'オートリーズ' } },
-          { id: 'r3', title: 'イースト・塩・残りの水を加える', uses: ['yeast', 'salt', { ref: 'water', pctOfFlour: 6, label: '残りの水' }],
+          { id: 'r2', phase: 'dough', title: 'オートリーズ', body: 'ラップをして休ませる。', timer: { min: 20, label: 'オートリーズ' } },
+          { id: 'r3', phase: 'dough', title: 'イースト・塩・残りの水を加える', uses: ['yeast', 'salt', { ref: 'water', pctOfFlour: 6, label: '残りの水' }],
             body: 'イーストと塩を加え、残りの水{{part:water:6}}を少しずつ揉み込むように加えて、全体がなじむまで混ぜる。混ぜ終えた時点の生地温は24〜26℃が目安。' },
-          { id: 'r4', title: '休ませ①', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ①' } },
-          { id: 'r5', title: '1回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
-          { id: 'r6', title: '休ませ②', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ②' } },
-          { id: 'r7', title: '2回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
-          { id: 'r8', title: '休ませ③', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ③' } },
-          { id: 'r9', title: '3回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
+          { id: 'r4', phase: 'dough', title: '休ませ①', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ①' } },
+          { id: 'r5', phase: 'dough', title: '1回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
+          { id: 'r6', phase: 'dough', title: '休ませ②', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ②' } },
+          { id: 'r7', phase: 'dough', title: '2回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
+          { id: 'r8', phase: 'dough', title: '休ませ③', body: 'ラップをして休ませる。', timer: { min: 20, label: '休ませ③' } },
+          { id: 'r9', phase: 'dough', title: '3回目のフォールド', body: '生地の四方を持ち上げて中央へ折りたたむ。' },
           { id: 'route', type: 'branch', atStart: true, title: '発酵の計画', body: '作り始める時に選びます。イースト量がこの選択で決まります。',
             options: [
               { id: 'today', label: '当日焼き', icon: '🔥', sub: 'イースト0.4%・室温で一次発酵 → 当日焼成', steps: [
-                { id: 'td-ferm1', title: '一次発酵', body: '室温で発酵させる。',
-                  ferment: { temp: '室温', cue: '1.5倍前後・表面に気泡が見える' } },
-                { id: 'td-div', title: '分割', body: '打ち粉をした台に出し、{{divide}}。成形はせず、形を軽く整える。' },
-                { id: 'td-ferm2', title: '最終発酵', body: '布どり等で休ませる。時間より生地の状態を優先する。',
-                  ferment: { temp: '室温', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 90 },
+                // 「室温」は数値にしない（tempMode: 'ambient'）
+                { id: 'td-ferm1', phase: 'dough', title: '一次発酵', body: '室温で発酵させる。',
+                  ferment: { temp: '室温', tempMode: 'ambient', cue: '1.5倍前後・表面に気泡が見える' } },
+                { id: 'td-div', phase: 'divide', title: '分割', body: '打ち粉をした台に出し、{{divide}}。成形はせず、形を軽く整える。' },
+                { id: 'td-ferm2', phase: 'proof', title: '最終発酵', body: '布どり等で休ませる。時間より生地の状態を優先する。',
+                  ferment: { temp: '室温', tempMode: 'ambient', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 90 },
                   tips: ['終盤にオーブンを250℃で予熱（スチームの準備も）'] },
                 ...RODEV_BAKE('td'),
               ] },
               { id: 'cold', label: '冷蔵発酵', icon: '❄️', sub: 'イースト0.2%・冷蔵4〜5℃で8〜15時間 → 翌日焼成', steps: [
-                { id: 'cd-cold', title: '冷蔵発酵', body: '3回目のフォールド後、容器ごと冷蔵庫（4〜5℃想定）へ入れる。8時間は最短目安。通常は10〜14時間を狙い、生地の状態を優先する。', cold: { minH: 8, maxH: 15 } },
-                { id: 'cd-div', title: '取り出し・分割', body: '冷蔵庫から出し、{{divide}}。成形はせず、形を軽く整える。' },
-                { id: 'cd-ferm2', title: '復温・最終発酵', body: '布どり等で休ませ、復温を兼ねて最終発酵させる。時間より生地の状態を優先する。',
-                  ferment: { temp: '室温', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 90 },
+                { id: 'cd-cold', phase: 'dough', title: '冷蔵発酵', body: '3回目のフォールド後、容器ごと冷蔵庫（4〜5℃想定）へ入れる。8時間は最短目安。通常は10〜14時間を狙い、生地の状態を優先する。', cold: { minH: 8, maxH: 15 } },
+                { id: 'cd-div', phase: 'divide', title: '取り出し・分割', body: '冷蔵庫から出し、{{divide}}。成形はせず、形を軽く整える。' },
+                { id: 'cd-ferm2', phase: 'proof', title: '復温・最終発酵', body: '布どり等で休ませ、復温を兼ねて最終発酵させる。時間より生地の状態を優先する。',
+                  ferment: { temp: '室温', tempMode: 'ambient', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 90 },
                   tips: ['終盤にオーブンを250℃で予熱（スチームの準備も）'] },
                 ...RODEV_BAKE('cd'),
               ] },
@@ -343,7 +356,7 @@ export function buildSeedRecipes() {
             { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳の温度を下げる'] },
             { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
-              ferment: { temp: '28〜30℃', tempMin: 28, tempMax: 30, cue: '約2倍', min: 60, max: 90 } },
+              ferment: { temp: '28〜30℃', tempMode: 'range', tempMin: 28, tempMax: 30, cue: '約2倍', min: 60, max: 90 } },
             ...ANPAN_AFTER('h'),
           ],
           tips: [
@@ -472,6 +485,8 @@ export function buildSeedRecipes() {
           scaleMode: 'flour', baseFlour: 250,
           yieldLabel: '1斤',
           hb: { mode: 'full_auto', recommendation: 'recommended', model: 'siroca SB-2D271', course: '食パン／ソフト系', notes: ['焼き色「淡め」'] },
+          dough: { familyId: 'rich-shokupan' },
+          mix: false, // HB全自動：途中で生地を取り出せないので、同時製作の対象外
           bakeSummary: 'HB 食パン／ソフト系コース・焼き色 淡め',
           ingredientGroups: [
             { id: 'flour', name: '粉', kind: 'flour', items: [I('haru', '春よ恋', 220), I('kitano', 'キタノカオリ', 30)] },
@@ -487,13 +502,14 @@ export function buildSeedRecipes() {
             ] },
           ],
           steps: [
-            { id: 'a1', title: 'HBへ材料を投入',
+            { id: 'a1', phase: 'dough', title: 'HBへ材料を投入',
               uses: ['haru', 'kitano', 'milk', 'water', 'cream', 'sugar', 'honey', 'salt', 'butter', 'yeast'],
               body: '機種の説明書に従う順番で投入する。イースト専用投入口がある場合はそこへ。' },
-            { id: 'a2', title: 'コースを開始', body: '食パンまたはソフト系コース。焼き色は「淡め」。',
+            { id: 'a2', phase: 'bake', title: 'コースを開始', body: '食パンまたはソフト系コース。焼き色は「淡め」。',
+              bake: { method: 'hb' },
               hb: 'siroca SB-2D271：食パン／ソフト系コース、焼き色 淡め' },
-            { id: 'a3', title: '取り出す', body: '焼き上がったらすぐケースから出して網にのせる。' },
-            { id: 'a4', title: '袋に入れる', body: '粗熱が取れ、まだ少し温かいうちに袋へ入れる。クラストへ少し水分を戻して、耳を柔らかくする。' },
+            { id: 'a3', phase: 'after', title: '取り出す', body: '焼き上がったらすぐケースから出して網にのせる。' },
+            { id: 'a4', phase: 'after', title: '袋に入れる', body: '粗熱が取れ、まだ少し温かいうちに袋へ入れる。クラストへ少し水分を戻して、耳を柔らかくする。' },
           ],
           tips: ['この食パンではモルトとリスドォルは使わない', '有塩バター使用時は塩を0.5g減らす'],
         },
@@ -506,20 +522,22 @@ export function buildSeedRecipes() {
           hb: { mode: 'knead_first_fermentation', recommendation: 'recommended', model: 'siroca SB-2D271', course: 'パン生地コース', notes: ['こね〜一次発酵までHB'] },
           bakeSummary: '210℃予熱 → 195℃ 30〜33分',
           timeLabel: '約2.5〜3.5時間',
+          dough: { familyId: 'rich-shokupan' },
           ingredientGroups: PAN12_GROUPS(),
           steps: [
-            { id: 'b1', title: 'HBでこね〜一次発酵',
+            { id: 'b1', phase: 'dough', title: 'HBでこね〜一次発酵',
               uses: ['haru', 'kitano', 'milk', 'water', 'cream', 'sugar', 'honey', 'salt', 'butter', 'yeast'],
               body: 'パン生地コースを使用。一次発酵終了時の目安は約2倍。',
               hb: 'siroca SB-2D271：パン生地コース（こね〜一次発酵）' },
-            { id: 'b2', title: '分割・ベンチ', body: '2分割して軽く丸め、休ませる。', timer: { min: 15, label: 'ベンチタイム' } },
-            { id: 'b3', title: '成形', body: '縦長に伸ばす。左右を中央へ折り、軽く伸ばして上から巻く。同じものを2本作り、巻き終わりを下にして型へ入れる。' },
-            { id: 'b4', title: '二次発酵', body: '時間固定ではなく高さを優先して判定する。',
-              ferment: { temp: '32〜35℃', cue: '生地頂点が型の縁より約1cm下 → 蓋をする' },
+            { id: 'b2', phase: 'divide', title: '分割・ベンチ', body: '2分割して軽く丸め、休ませる。', timer: { min: 15, label: 'ベンチタイム' } },
+            { id: 'b3', phase: 'shape', title: '成形', body: '縦長に伸ばす。左右を中央へ折り、軽く伸ばして上から巻く。同じものを2本作り、巻き終わりを下にして型へ入れる。' },
+            { id: 'b4', phase: 'proof', title: '二次発酵', body: '時間固定ではなく高さを優先して判定する。',
+              ferment: { temp: '32〜35℃', tempMode: 'range', tempMin: 32, tempMax: 35, cue: '生地頂点が型の縁より約1cm下 → 蓋をする' },
               tips: ['終盤に210℃で予熱を開始', '初回は「型の縁より約1cm下」で蓋をする'] },
-            { id: 'b5', title: '焼成', body: '210℃で予熱 → 195℃で焼く。焼き不足なら2〜3分追加。', timer: { min: 30, max: 33, label: '焼成 195℃' } },
-            { id: 'b6', title: '焼成後', uses: ['mbutter'], body: '型に軽くショックを与え、すぐ型から取り出す。好みで表面に溶かしバターを薄く塗る。' },
-            { id: 'b7', title: '冷却', body: '粗熱を取り、まだ少し温かい段階で袋へ。' },
+            { id: 'b5', phase: 'bake', title: '焼成', body: '210℃で予熱 → 195℃で焼く。焼き不足なら2〜3分追加。', timer: { min: 30, max: 33, label: '焼成 195℃' },
+              bake: { method: 'oven', preheat: 210, temp: 195, min: 30, max: 33, steam: false, vessel: 'pan' } },
+            { id: 'b6', phase: 'after', title: '焼成後', uses: ['mbutter'], body: '型に軽くショックを与え、すぐ型から取り出す。好みで表面に溶かしバターを薄く塗る。' },
+            { id: 'b7', phase: 'after', title: '冷却', body: '粗熱を取り、まだ少し温かい段階で袋へ。' },
           ],
           tips: [
             '基準は粉250g・総生地量 約500g（12cm角型＝1728cm³で型比容積 約3.45）',
@@ -540,33 +558,35 @@ export function buildSeedRecipes() {
           hb: { mode: 'none', label: '手ごね', recommendation: 'not_recommended', model: '', course: '', notes: ['手ごね（HBは使わない）'] },
           bakeSummary: '210℃予熱 → 195℃ 30〜33分',
           timeLabel: '約3〜4時間',
+          dough: { familyId: 'rich-shokupan' },
           ingredientGroups: PAN12_GROUPS(),
           steps: [
-            { id: 'h1', title: '材料を混ぜる',
+            { id: 'h1', phase: 'dough', title: '材料を混ぜる',
               uses: ['haru', 'kitano', 'sugar', 'salt', 'yeast', 'milk', 'cream', 'honey', 'water'],
               body: 'ボウルに粉2種・砂糖・塩・ドライイーストを入れる（塩の上にイーストを置かない）。別容器で牛乳・生クリーム・はちみつ・水を混ぜて加え、ヘラやカードで粉気がなくなるまで混ぜる。バターはまだ入れない。' },
-            { id: 'h2', title: '休ませる', body: 'ラップをして休ませる。発酵ではなく、水分をなじませて手ごねを楽にするための時間。',
+            { id: 'h2', phase: 'dough', title: '休ませる', body: 'ラップをして休ませる。発酵ではなく、水分をなじませて手ごねを楽にするための時間。',
               timer: { min: 10, label: '水分をなじませる' } },
-            { id: 'h3', title: '一次こね', body: '台に出してこねる。打ち粉は原則使わず、「押す・折る・転がす」を繰り返す。生地がつながり、表面が少し滑らかになったら次へ。',
+            { id: 'h3', phase: 'dough', title: '一次こね', body: '台に出してこねる。打ち粉は原則使わず、「押す・折る・転がす」を繰り返す。生地がつながり、表面が少し滑らかになったら次へ。',
               timer: { min: 5, max: 8, label: '一次こね' },
               tips: ['べたつくうちはカードで台から剥がしながら続ける'] },
-            { id: 'h4', title: 'バターを加える', uses: ['butter'],
+            { id: 'h4', phase: 'dough', title: 'バターを加える', uses: ['butter'],
               body: '柔らかくした無塩バターを加え、そのままこね続ける。',
               tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
-            { id: 'h5', title: '本ごね', body: '時間より生地の状態で判断する。滑らかで弾力があり、薄く伸ばすと指が透ける膜ができればOK。完全に破れない極薄膜まで追い込む必要はない。',
+            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。滑らかで弾力があり、薄く伸ばすと指が透ける膜ができればOK。完全に破れない極薄膜まで追い込む必要はない。',
               timer: { min: 8, max: 15, label: '本ごね' } },
-            { id: 'h6', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
+            { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳などの液温を下げる'] },
-            { id: 'h7', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
-              ferment: { temp: '28〜30℃', cue: '約2倍', min: 60, max: 90 } },
-            { id: 'h8', title: '分割・ベンチ', body: '2分割して軽く丸め、休ませる。', timer: { min: 15, label: 'ベンチタイム' } },
-            { id: 'h9', title: '成形', body: '縦長に伸ばす。左右を中央へ折り、軽く伸ばして上から巻く。同じものを2本作り、巻き終わりを下にして型へ入れる。' },
-            { id: 'h10', title: '二次発酵', body: '時間固定ではなく高さを優先して判定する。',
-              ferment: { temp: '32〜35℃', cue: '生地頂点が型の縁より約1cm下 → 蓋をする', min: 45, max: 75 },
+            { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
+              ferment: { temp: '28〜30℃', tempMode: 'range', tempMin: 28, tempMax: 30, cue: '約2倍', min: 60, max: 90 } },
+            { id: 'h8', phase: 'divide', title: '分割・ベンチ', body: '2分割して軽く丸め、休ませる。', timer: { min: 15, label: 'ベンチタイム' } },
+            { id: 'h9', phase: 'shape', title: '成形', body: '縦長に伸ばす。左右を中央へ折り、軽く伸ばして上から巻く。同じものを2本作り、巻き終わりを下にして型へ入れる。' },
+            { id: 'h10', phase: 'proof', title: '二次発酵', body: '時間固定ではなく高さを優先して判定する。',
+              ferment: { temp: '32〜35℃', tempMode: 'range', tempMin: 32, tempMax: 35, cue: '生地頂点が型の縁より約1cm下 → 蓋をする', min: 45, max: 75 },
               tips: ['終盤に210℃で予熱を開始', '初回は「型の縁より約1cm下」で蓋をする'] },
-            { id: 'h11', title: '焼成', body: '210℃で予熱 → 195℃で焼く。焼き不足なら2〜3分追加。', timer: { min: 30, max: 33, label: '焼成 195℃' } },
-            { id: 'h12', title: '焼成後', uses: ['mbutter'], body: '型に軽くショックを与え、すぐ型から取り出す。好みで表面に溶かしバターを薄く塗る。' },
-            { id: 'h13', title: '冷却', body: '粗熱を取り、まだ少し温かい段階で袋へ。' },
+            { id: 'h11', phase: 'bake', title: '焼成', body: '210℃で予熱 → 195℃で焼く。焼き不足なら2〜3分追加。', timer: { min: 30, max: 33, label: '焼成 195℃' },
+              bake: { method: 'oven', preheat: 210, temp: 195, min: 30, max: 33, steam: false, vessel: 'pan' } },
+            { id: 'h12', phase: 'after', title: '焼成後', uses: ['mbutter'], body: '型に軽くショックを与え、すぐ型から取り出す。好みで表面に溶かしバターを薄く塗る。' },
+            { id: 'h13', phase: 'after', title: '冷却', body: '粗熱を取り、まだ少し温かい段階で袋へ。' },
           ],
           tips: [
             '配合・型・焼成はBと同じ。違うのはこね方と一次発酵の環境',
@@ -645,8 +665,53 @@ export function migrateRecipes(recipes, fromVersion) {
       if (touched && !changed.includes(r)) changed.push(r);
     }
   }
+  if (fromVersion < 6) {
+    // v1.0〜v1.1.2 の編集画面の不具合の修復：空欄の最小・最大が 0% として保存されていた
+    // 既知の制限：標準レシピの材料に対して意図的に設定した「最小0%」は、この不具合由来のものと
+    // 区別できないため、標準に最小が無い材料では取り除かれる（自作レシピの最小0%・最大が正の値の組は残す）
+    const seeds = buildSeedRecipes();
+    for (const r of recipes) {
+      let touched = false;
+      for (const v of r.variants || []) {
+        const sv = seeds.find((x) => x.id === r.id)?.variants.find((x) => x.id === v.id);
+        for (const g of v.ingredientGroups || []) {
+          for (const it of g.items) {
+            const p = it.pct;
+            if (!p || !(+p.target > 0)) continue;
+            const si = sv?.ingredientGroups.find((x) => x.id === g.id)?.items.find((x) => x.id === it.id);
+            const maxArtifact = p.max === 0;
+            if (maxArtifact) { delete p.max; touched = true; }
+            if (p.min === 0 && (maxArtifact || (si && si.pct && si.pct.min == null))) { delete p.min; touched = true; }
+          }
+        }
+      }
+      if (touched && !changed.includes(r)) changed.push(r);
+    }
+  }
+  if (fromVersion < 7) {
+    // V1.5：同時製作の判定用メタデータ（phase・ferment.tempMode/tempMin/tempMax・bake・系統・mix）だけを足す。
+    // 本文・配合は変えないので seedRev は上げず、「新しい標準版があります」も出さない。
+    const seeds = buildSeedRecipes();
+    for (const r of recipes) {
+      const sr = seeds.find((x) => x.id === r.id);
+      if (!sr) continue;
+      let touched = false;
+      for (const v of r.variants || []) {
+        const sv = sr.variants.find((x) => x.id === v.id);
+        if (!sv) continue;
+        // 系統：配合が標準と同じときだけ付ける（編集で配合を変えた variant には付けない）
+        if (sv.dough && !v.dough?.familyId && safeSig(v) === safeSig(sv)) { v.dough = { ...(v.dough || {}), ...sv.dough }; touched = true; }
+        // HB全自動など：HBの使い方が標準と同じときだけ mix:false を付ける
+        if (sv.mix === false && v.mix == null && v.hb?.mode === sv.hb?.mode) { v.mix = false; touched = true; }
+        // 工程：標準と完全に同じ variant にだけ付ける（v1.1.0 と同じ基準）
+        if (applyStepMeta(v, sv)) touched = true;
+      }
+      if (touched && !changed.includes(r)) changed.push(r);
+    }
+  }
   return changed;
 }
+const safeSig = (v) => { try { return doughSignature(v); } catch { return null; } };
 
 const norm = (x) => String(x ?? '').normalize('NFKC').replace(/\s+/g, '');
 
@@ -673,10 +738,14 @@ export function applyStepMeta(v, sv) {
   if (A.every((s) => s.type === 'branch' || s.phase)) return false; // もう付いている
   if (A.length !== B.length || A.some((s, i) => s.id !== B[i].id)) return false;
   if (A.some((s, i) => stepStruct(s) !== stepStruct(B[i]))) return false;
+  // 焼成工程は温度が本文に書かれているので、本文・焼成の要約まで標準と同じときだけ付ける
+  if (A.some((s, i) => (B[i].phase === 'bake' || B[i].bake) && norm(s.body) !== norm(B[i].body))) return false;
+  if (B.some((s) => s.phase === 'bake' || s.bake) && norm(v.bakeSummary) !== norm(sv.bakeSummary)) return false;
   A.forEach((s, i) => {
     const src = B[i];
     for (const k of META_KEYS) if (src[k] != null && s[k] == null) s[k] = JSON.parse(JSON.stringify(src[k]));
     if (s.ferment && src.ferment) {
+      if (src.ferment.tempMode != null && s.ferment.tempMode == null) s.ferment.tempMode = src.ferment.tempMode;
       if (src.ferment.tempMin != null && s.ferment.tempMin == null) s.ferment.tempMin = src.ferment.tempMin;
       if (src.ferment.tempMax != null && s.ferment.tempMax == null) s.ferment.tempMax = src.ferment.tempMax;
     }

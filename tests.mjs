@@ -1,7 +1,7 @@
 // パンノート 自動テスト（計算・標準レシピ・移行処理）
 // 実行: node tests.mjs  （app.js と同じフォルダで）
 import * as C from './calc.js';
-import { buildSeedRecipes, migrateRecipes, normalizeVariant, applyStepMeta, SEED_VERSION } from './seed.js';
+import { buildSeedRecipes, migrateRecipes, normalizeVariant, applyStepMeta, SEED_VERSION, DOUGH_FAMILIES } from './seed.js';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = '') => {
@@ -159,6 +159,558 @@ console.log('12. HB容量（SB-2D271 パン生地コース 320g）');
   ok('粉400g（16個）警告あり', /320g/.test(C.hbCapacityWarning(v, 400) || ''));
   ok('手ごね版（容量なし）は警告しない', C.hbCapacityWarning(R('anpan').variants[1], 400) == null);
   ok('ほかのコース（食パン全自動）には流用しない', C.hbCapacityWarning(R('shokupan-junnama').variants[0], 400) == null);
+}
+
+console.log('v1.1.2-1. 材料名を変えたら ingKey を外す');
+{
+  const before = sweet[0][1], after = clone(before);
+  after.ingredientGroups[1].items.find((x) => x.id === 'milk').name = '豆乳';
+  C.reconcileIngKeys(before, after);
+  ok('牛乳→豆乳で ingKey が外れる', after.ingredientGroups[1].items.find((x) => x.id === 'milk').ingKey == null);
+  ok('クリームパンとは signature が別になる', C.doughSignature(after) !== C.doughSignature(sweet[2][1]));
+  const keep = clone(before);
+  keep.ingredientGroups[1].items.find((x) => x.id === 'milk').name = ' 牛 乳 ';   // 空白だけの違い
+  C.reconcileIngKeys(before, keep);
+  ok('空白だけの違いなら ingKey を保つ', keep.ingredientGroups[1].items.find((x) => x.id === 'milk').ingKey === 'milk' && C.doughSignature(keep) === sig0);
+  const kana = clone(before);
+  kana.ingredientGroups[1].items.find((x) => x.id === 'yeast').name = 'ﾄﾞﾗｲｲｰｽﾄ';   // 半角カナ（NFKC で同じ）
+  C.reconcileIngKeys(before, kana);
+  ok('半角・全角の違いなら ingKey を保つ', kana.ingredientGroups[1].items.find((x) => x.id === 'yeast').ingKey === 'yeast.dry');
+}
+
+console.log('v1.1.2-2. 工程の条件を変えたら mix 用メタデータを外す');
+{
+  const cp = sweet[2][1];
+  const e1 = clone(cp); e1.steps.find((x) => x.id === 'cp-bake').timer = { min: 20, max: 25, label: '焼成' };
+  ok('焼成タイマー 12〜15→20〜25分：外す', C.stripStaleMixMeta(cp, e1) === true);
+  ok('  phaseComplete が false', !C.phaseComplete(e1));
+  ok('  bake が残っていない', e1.steps.every((x) => x.bake == null));
+  ok('  parallel は残る', e1.steps.find((x) => x.id === 'cp1').parallel === true);
+  const e2 = clone(cp); Object.assign(e2.steps.find((x) => x.id === 'cp-ferm2').ferment, { temp: '25℃', min: 90, max: 120 });
+  ok('二次発酵 25℃・90〜120分：外す（tempMin/tempMax も）', C.stripStaleMixMeta(cp, e2) === true && e2.steps.every((x) => x.ferment?.tempMin == null && x.ferment?.tempMax == null));
+  const e3 = clone(cp); e3.steps.push({ id: 'new', title: '追加の工程', body: '' });
+  ok('工程を追加：外す', C.stripStaleMixMeta(cp, e3) === true && !C.phaseComplete(e3));
+  const e4 = clone(cp); e4.steps.find((x) => x.id === 'cp-shape').title = '包む（私流）'; e4.steps.find((x) => x.id === 'cp-shape').body = '言い回しを変えた';
+  ok('見出し・本文だけの変更：残す', C.stripStaleMixMeta(cp, e4) === false && C.phaseComplete(e4));
+}
+
+console.log('v1.1.2-6. 同じ材料を複数行に分けたときの min/max 合算');
+{
+  const mk = (rows) => ({ ingredientGroups: [{ id: 'dough', kind: 'dough', items: rows.map((p, i) => ({ id: `w${i}`, name: '水', basis: 'flour', pct: p })) }] });
+  const split = mk([{ target: 10 }, { target: 20, max: 30 }]);
+  const single = mk([{ target: 30, max: 40 }]);
+  ok('水10% ＋ 水20〜30% ≡ 水30〜40%', C.doughSignature(split) === C.doughSignature(single), `${C.doughSignature(split)} / ${C.doughSignature(single)}`);
+  const lo = mk([{ target: 10 }, { target: 20, min: 15 }]);
+  ok('水10% ＋ 水15〜20% ≡ 水25〜30%', C.doughSignature(lo) === C.doughSignature(mk([{ target: 30, min: 25 }])));
+  const pl = { ingredientGroups: [{ id: 'dough', kind: 'dough', items: [
+    { id: 'y1', name: 'イースト', basis: 'flour', pct: { target: 0.2 } },
+    { id: 'y2', name: 'イースト', basis: 'flour', pct: { target: 0.2 }, byPlan: { today: { target: 0.2 }, cold: { target: 0 } } }] }] };
+  const pl1 = { ingredientGroups: [{ id: 'dough', kind: 'dough', items: [
+    { id: 'y', name: 'イースト', basis: 'flour', pct: { target: 0.4 }, byPlan: { today: { target: 0.4 }, cold: { target: 0.2 } } }] }] };
+  ok('計画別の量も、計画のない行の量を足して比較', C.doughSignature(pl) === C.doughSignature(pl1), `${C.doughSignature(pl)} / ${C.doughSignature(pl1)}`);
+}
+
+console.log('v1.1.3-1. 焼成工程の本文・焼成の要約の変更');
+{
+  const cp = sweet[2][1];
+  const e1 = clone(cp); e1.steps.find((x) => x.id === 'cp-bake').body = '200℃で予熱 → 190℃で焼く。';
+  ok('焼成本文 190→200℃予熱・180→190℃：外す', C.stripStaleMixMeta(cp, e1) === true && !C.phaseComplete(e1) && e1.steps.every((x) => !x.bake));
+  const e2 = clone(cp); e2.bakeSummary = '200℃予熱 → 190℃ 12〜15分';
+  ok('焼成の要約だけ変更：外す', C.stripStaleMixMeta(cp, e2) === true);
+  const e3 = clone(cp); e3.steps.find((x) => x.id === 'cp-shape').body = '言い回しだけ変えた成形の本文';
+  ok('成形の本文だけ変更：残す', C.stripStaleMixMeta(cp, e3) === false && C.phaseComplete(e3));
+  // 移行：旧あんぱんで焼成本文だけ190℃に変えていた場合は付けない
+  const old = clone(R('anpan'));
+  for (const v of old.variants) for (const x of v.steps) { delete x.phase; delete x.bake; }
+  old.variants[0].steps.find((x) => x.id === 'a-bake').body = '190℃で焼く。';
+  ok('移行：焼成本文が標準と違う variant には付けない', applyStepMeta(old.variants[0], R('anpan').variants[0]) === false && old.variants[0].steps.every((x) => !x.phase && !x.bake));
+  const old2 = clone(R('anpan'));
+  for (const v of old2.variants) for (const x of v.steps) { delete x.phase; delete x.bake; }
+  old2.variants[0].bakeSummary = '190℃ 15分';
+  ok('移行：焼成の要約が標準と違う variant には付けない', applyStepMeta(old2.variants[0], R('anpan').variants[0]) === false);
+}
+
+console.log('v1.1.3-2. 名前を標準に戻したら ingKey を戻す');
+{
+  const std = sweet[0][1];
+  const s1 = clone(std); s1.ingredientGroups[1].items.find((x) => x.id === 'milk').name = '豆乳';
+  C.reconcileIngKeys(std, s1, std);
+  ok('牛乳→豆乳：外れる', s1.ingredientGroups[1].items.find((x) => x.id === 'milk').ingKey == null && C.doughSignature(s1) !== sig0);
+  const s2 = clone(s1); s2.ingredientGroups[1].items.find((x) => x.id === 'milk').name = '牛乳';
+  C.reconcileIngKeys(s1, s2, std);
+  ok('豆乳→牛乳に戻す：ingKey が戻り signature が再一致', s2.ingredientGroups[1].items.find((x) => x.id === 'milk').ingKey === 'milk' && C.doughSignature(s2) === sig0);
+  ok('  差分表示も空になる', C.doughDiff(std, s2).length === 0, C.doughDiff(std, s2).join());
+  const s3 = clone(s1); s3.ingredientGroups[1].items.find((x) => x.id === 'milk').name = '牛乳';
+  C.reconcileIngKeys(s1, s3, null);
+  ok('標準レシピでない（standard なし）なら戻さない', s3.ingredientGroups[1].items.find((x) => x.id === 'milk').ingKey == null);
+}
+
+console.log('v1.1.3-3. 下準備の材料を変えたら仕上がり目安を未確認に');
+{
+  const cp = sweet[2][1];
+  const e = clone(cp);
+  for (const it of e.ingredientGroups.find((g) => g.id === 'custard').items) if (it.basis === 'batch') it.g = 1;
+  C.markChangedPreps(cp, e);
+  const g = e.ingredientGroups.find((x) => x.id === 'custard');
+  ok('材料を全部1gに：yieldVerified=false', g.batch.yieldVerified === false);
+  ok('  prepKey は外し、元の値は prepKeyOrigin に残す', g.prepKey == null && g.prepKeyOrigin === 'custard-basic');
+  const w = C.prepYieldWarnings(e);
+  ok('  「再確認が必要」の警告が出る', w.some((x) => x.unverified && /再確認が必要/.test(x.msg)), JSON.stringify(w));
+  const e2 = clone(e); e2.ingredientGroups.find((x) => x.id === 'custard')._yieldConfirmed = true;
+  C.markChangedPreps(e, e2);
+  ok('「実際に作って確認した」なら yieldVerified=true・警告なし', e2.ingredientGroups.find((x) => x.id === 'custard').batch.yieldVerified === true && C.prepYieldWarnings(e2).length === 0);
+  const e3 = clone(cp); e3.ingredientGroups.find((x) => x.id === 'filling').items[0].note = 'メモだけ変更';
+  C.markChangedPreps(cp, e3);
+  ok('下準備の材料を変えていなければそのまま', e3.ingredientGroups.find((x) => x.id === 'custard').batch.yieldVerified == null && e3.ingredientGroups.find((x) => x.id === 'custard').prepKey === 'custard-basic');
+}
+
+console.log('v1.1.3-5. 保存前の入力チェック');
+{
+  const cp = sweet[2][1];
+  ok('標準6レシピ（全 variant）は問題なし', seeds.every((r) => r.variants.every((v) => C.validateVariant(v).length === 0)), seeds.flatMap((r) => r.variants.flatMap((v) => C.validateVariant(v))).join());
+  const e1 = clone(cp); e1.ingredientGroups.find((g) => g.id === 'filling').items[0].perCount.target = null;
+  ok('カスタードの1個あたりが空欄：エラー', C.validateVariant(e1).some((m) => /1個あたりの量/.test(m)));
+  const e2 = clone(R('choco-pan').variants[0]); Object.assign(e2.ingredientGroups.find((g) => g.id === 'filling').items[0].perCount, { min: 20, target: 18, max: 25 });
+  ok('チョコ min 20 > target 18：エラー', C.validateVariant(e2).some((m) => /最小/.test(m)));
+  const e3 = clone(cp); e3.ingredientGroups[1].items[0].pct.max = 50;
+  ok('牛乳 max 50% < target 60%：エラー', C.validateVariant(e3).some((m) => /最大/.test(m)));
+}
+
+console.log('v1.1.3-6. 編集画面の不具合（空欄の最小・最大が 0% で保存）の修復');
+{
+  const bad = clone(R('anpan'));
+  for (const v of bad.variants) for (const g of v.ingredientGroups) for (const it of g.items) if (it.pct) { it.pct.min ??= 0; it.pct.max ??= 0; }
+  bad.variants[0].ingredientGroups[1].items.find((x) => x.id === 'milk').pct.max = 65;   // 正しく入力された最大は残る
+  ok('修復前は signature が標準と一致しない', C.doughSignature(bad.variants[0]) !== sig0);
+  migrateRecipes([bad], 5);
+  ok('SEED_VERSION 5→6 の修復後は標準と一致', C.doughSignature(bad.variants[0]) === sig0 && C.doughSignature(bad.variants[1]) === sig0, C.doughSignature(bad.variants[0]));
+  ok('入力済みの牛乳の最大65%は残す', bad.variants[0].ingredientGroups[1].items.find((x) => x.id === 'milk').pct.max === 65);
+  const own = { id: 'mine', variants: [{ id: 'v', ingredientGroups: [{ id: 'dough', kind: 'dough', items: [{ id: 'w', name: '水', basis: 'flour', pct: { target: 2, min: 0, max: 5 } }] }], steps: [] }] };
+  migrateRecipes([own], 5);
+  ok('自作レシピの意図した「最小0%・最大5%」は残す', own.variants[0].ingredientGroups[0].items[0].pct.min === 0 && own.variants[0].ingredientGroups[0].items[0].pct.max === 5);
+}
+
+console.log('v1.1.4-1. 標準の工程に完全に戻したら同時製作用データを付け直す');
+{
+  const cp = sweet[2][1];
+  const e = clone(cp); e.steps.find((x) => x.id === 'cp-bake').timer = { min: 20, max: 25, label: '焼成 180℃' };
+  C.stripStaleMixMeta(cp, e);
+  ok('12〜15→20〜25分：phase が消える', !C.phaseComplete(e));
+  const back = clone(e); back.steps.find((x) => x.id === 'cp-bake').timer = { min: 12, max: 15, label: '焼成 180℃' };
+  C.stripStaleMixMeta(e, back);
+  const restored = !C.phaseComplete(back) && applyStepMeta(back, cp);
+  const canon = (o) => JSON.stringify(o, (k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort()) : x));
+  ok('12〜15分に戻す：phase・bake・tempMin/tempMax が完全に戻る（標準と同じ内容）', restored && canon(back.steps) === canon(cp.steps) && C.phaseComplete(back));
+  const half = clone(e); half.steps.find((x) => x.id === 'cp-bake').timer = { min: 12, max: 16, label: '焼成 180℃' };
+  C.stripStaleMixMeta(e, half);
+  ok('1項目でも違う（最長16分）なら戻さない', applyStepMeta(half, cp) === false && !C.phaseComplete(half));
+  const tb = clone(e); tb.steps.find((x) => x.id === 'cp-bake').timer = { min: 12, max: 15, label: '焼成 180℃' }; tb.steps.find((x) => x.id === 'cp-bake').body = '180℃で焼く。';
+  ok('タイマーは戻っても焼成本文が違えば戻さない', applyStepMeta(tb, cp) === false);
+}
+
+console.log('v1.1.4-2. 工程時間・負数の入力チェック');
+{
+  const cp = sweet[2][1];
+  const chk = (fn) => { const v = clone(cp); fn(v); return C.validateVariant(v); };
+  ok('timer 最短20 > 最長10：保存不可', chk((v) => { v.steps.find((x) => x.id === 'cp-bake').timer = { min: 20, max: 10 }; }).some((m) => /最長.*最短/.test(m)));
+  ok('timer 負数：保存不可', chk((v) => { v.steps.find((x) => x.id === 'cp-bake').timer = { min: -5 }; }).some((m) => /0より大きく/.test(m)));
+  ok('ferment 最短90 > 最長40：保存不可', chk((v) => { Object.assign(v.steps.find((x) => x.id === 'cp-ferm2').ferment, { min: 90, max: 40 }); }).some((m) => /発酵時間/.test(m)));
+  ok('cold 最短15h > 最長8h：保存不可', (() => { const v = clone(R('rodev-90').variants[0]); const c = C.findStep(v.steps, 'cd-cold'); c.cold = { minH: 15, maxH: 8 }; return C.validateVariant(v).some((m) => /冷蔵時間/.test(m)); })());
+  ok('材料の target 負数（塩 -1%）：保存不可', chk((v) => { v.ingredientGroups[1].items.find((x) => x.id === 'salt').pct.target = -1; }).some((m) => /塩/.test(m)));
+  ok('材料の max 負数：保存不可', chk((v) => { v.ingredientGroups[1].items.find((x) => x.id === 'salt').pct.max = -1; }).some((m) => /最大が負/.test(m)));
+  ok('発酵が見た目だけ（時間なし）の工程は問題なし', C.validateVariant(R('rodev-90').variants[0]).length === 0);
+}
+
+console.log('v1.1.4-3. カスタードを標準に戻したら prepKey を戻す');
+{
+  const cp = sweet[2][1];
+  const cu = (v) => v.ingredientGroups.find((x) => x.id === 'custard');
+  const e1 = clone(cp); cu(e1).items.find((x) => x.id === 'cu-milk').g = 120;
+  C.markChangedPreps(cp, e1, cp);
+  ok('牛乳110→120g：prepKey が外れる', cu(e1).prepKey == null && cu(e1).prepKeyOrigin === 'custard-basic');
+  const e2 = clone(e1); cu(e2).items.find((x) => x.id === 'cu-milk').g = 110; cu(e2)._yieldConfirmed = true;
+  C.markChangedPreps(e1, e2, cp);
+  ok('110gに戻して確認済み：prepKey:custard-basic が戻る', cu(e2).prepKey === 'custard-basic' && cu(e2).batch.yieldVerified === true);
+  const e3 = clone(e1); cu(e3).items.find((x) => x.id === 'cu-milk').g = 110;
+  C.markChangedPreps(e1, e3, cp);
+  ok('110gに戻しても未確認なら戻さない', cu(e3).prepKey == null);
+  const e4 = clone(e1); cu(e4).items.find((x) => x.id === 'cu-milk').g = 110; cu(e4).items.find((x) => x.id === 'cu-sugar').g = 26; cu(e4)._yieldConfirmed = true;
+  C.markChangedPreps(e1, e4, cp);
+  ok('砂糖が1gでも違えば戻さない', cu(e4).prepKey == null);
+  const e5 = clone(e1); cu(e5).items.find((x) => x.id === 'cu-milk').g = 110; cu(e5).batch.yieldPerUnit = 150; cu(e5)._yieldConfirmed = true;
+  C.markChangedPreps(e1, e5, cp);
+  ok('仕上がり目安（batch 設定）が違えば戻さない', cu(e5).prepKey == null);
+}
+
+console.log('v1.1.5-1. byPlan（発酵計画ごとの％）を1つずつ確認');
+{
+  const rd = R('rodev-90').variants[0];
+  const yeastOf = (v) => v.ingredientGroups.flatMap((g) => g.items).find((x) => x.byPlan);
+  const plans = Object.keys(yeastOf(rd).byPlan);
+  ok('ロデヴのイーストは計画2つ（当日・冷蔵）', plans.length === 2);
+  const setPlans = (a, b) => { const v = clone(rd); const y = yeastOf(v); y.byPlan[plans[0]] = { target: a }; y.byPlan[plans[1]] = { target: b }; y.pct = y.byPlan[plans[0]]; return C.validateVariant(v); };
+  ok('当日0.4% / 冷蔵-0.2%：保存不可', setPlans(0.4, -0.2).length > 0, setPlans(0.4, -0.2).join());
+  ok('当日0.4% / 冷蔵0.2%：保存可', setPlans(0.4, 0.2).length === 0, setPlans(0.4, 0.2).join());
+  ok('当日-0.4%（先頭の計画）：保存不可', setPlans(-0.4, 0.2).length > 0);
+  const withRange = (p) => { const v = clone(rd); const y = yeastOf(v); y.byPlan[plans[1]] = p; return C.validateVariant(v); };
+  ok('計画の min 負数：保存不可', withRange({ target: 0.2, min: -0.1 }).length > 0);
+  ok('計画の max 負数：保存不可', withRange({ target: 0.2, max: -0.1 }).length > 0);
+  ok('計画の 最小 > 目安：保存不可', withRange({ target: 0.2, min: 0.3 }).length > 0);
+  ok('計画の 目安 > 最大：保存不可', withRange({ target: 0.2, max: 0.1 }).length > 0);
+  ok('計画の 最小 ≤ 目安 ≤ 最大：保存可', withRange({ target: 0.2, min: 0.1, max: 0.3 }).length === 0);
+  ok('エラー文に計画名が入る', setPlans(0.4, -0.2).some((m) => /冷蔵/.test(m)), setPlans(0.4, -0.2).join());
+}
+
+console.log('v1.1.5-2. 個数・分割数は正の整数');
+{
+  const bc = (x, id = 'rodev-90') => { const v = clone(R(id).variants[0]); v.baseCount = x; return C.validateVariant(v); };
+  ok('ロデヴは flour モード・分割数2', R('rodev-90').variants[0].scaleMode === 'flour' && R('rodev-90').variants[0].baseCount === 2);
+  ok('ロデヴ baseCount -2：保存不可', bc(-2).length > 0);
+  ok('ロデヴ baseCount 2.5：保存不可', bc(2.5).length > 0);
+  ok('ロデヴ baseCount 0：保存不可', bc(0).length > 0);
+  ok('ロデヴ baseCount 2：保存可', bc(2).length === 0);
+  ok('ロデヴ baseCount 8：保存可', bc(8).length === 0);
+  ok('flour モードで未設定（null）：保存可', bc(null).length === 0);
+  ok('flour モードで未設定（項目なし）：保存可', (() => { const v = clone(R('rodev-90').variants[0]); delete v.baseCount; return C.validateVariant(v).length === 0; })());
+  const cnt = R('curry-pan').variants[0];
+  ok('カレーパンは count モード', cnt.scaleMode === 'count');
+  ok('count モード baseCount null：保存不可', bc(null, 'curry-pan').length > 0);
+  ok('count モード baseCount 2.5：保存不可', bc(2.5, 'curry-pan').length > 0);
+  ok('count モード baseCount -8：保存不可', bc(-8, 'curry-pan').length > 0);
+  ok('count モード baseCount 8：保存可', bc(8, 'curry-pan').length === 0);
+  ok('標準レシピ6件はすべて保存可', seeds.every((r) => r.variants.every((v) => C.validateVariant(v).length === 0)),
+    seeds.flatMap((r) => r.variants.map((v) => `${r.id}/${v.id}:${C.validateVariant(v).join('|')}`)).filter((x) => !x.endsWith(':')).join());
+}
+
+console.log('v1.1.5-3. 型の寸法は3辺それぞれ正の数');
+{
+  ok('12×12×12 → 1728', C.panVolume({ w: 12, d: 12, h: 12 }) === 1728);
+  ok('-12×-12×12 → 無効', C.panVolume({ w: -12, d: -12, h: 12 }) === 0);
+  ok('0×12×12 → 無効', C.panVolume({ w: 0, d: 12, h: 12 }) === 0);
+  ok('NaN を含む → 無効', C.panVolume({ w: NaN, d: 12, h: 12 }) === 0);
+  ok('Infinity を含む → 無効', C.panVolume({ w: Infinity, d: 12, h: 12 }) === 0);
+  ok('寸法なし・型なし → 無効', C.panVolume({}) === 0 && C.panVolume(null) === 0 && C.panVolume(undefined) === 0);
+  ok('数字の文字列は有効', C.panVolume({ w: '12', d: '12', h: '12' }) === 1728);
+  const sb = R('shokupan-junnama').variants.find((v) => v.scaleMode === 'panVolume');
+  ok('食パンに型基準の variant がある', !!sb);
+  const base = C.scaleFor(sb, {});
+  const bad = C.scaleFor(sb, { pan: { w: -12, d: -12, h: 12, custom: true } });
+  ok('負の寸法2つの型は基準の型で計算（倍率1）', Math.abs(bad.factor - 1) < 1e-9 && bad.flour === base.flour, JSON.stringify(bad));
+  ok('0 を含む型も基準の型で計算', Math.abs(C.scaleFor(sb, { pan: { w: 0, d: 12, h: 12 } }).factor - 1) < 1e-9);
+  const good = C.scaleFor(sb, { pan: { ...sb.basePan, w: sb.basePan.w * 2 } });
+  ok('正しい型は容積比で倍率', Math.abs(good.factor - 2) < 1e-9);
+  const pv = (pan) => { const v = clone(sb); v.basePan = pan; return C.validateVariant(v); };
+  ok('基準の型 -12×-12×12：保存不可', pv({ ...sb.basePan, w: -12, d: -12, h: 12 }).length > 0);
+  ok('基準の型 0×12×12：保存不可', pv({ ...sb.basePan, w: 0, d: 12, h: 12 }).length > 0);
+  ok('基準の型 正の寸法：保存可', pv({ ...sb.basePan }).length === 0);
+}
+
+console.log('v1.1.5-4. 工程が0件なら phaseComplete は false');
+{
+  const cp = R('cream-pan').variants[0];
+  ok('クリームパン標準：phaseComplete true', C.phaseComplete(cp) === true);
+  const e = clone(cp); e.steps = [];
+  ok('steps=[] → false', C.phaseComplete(e) === false);
+  const u = clone(cp); delete u.steps;
+  ok('steps なし → false（落ちない）', C.phaseComplete(u) === false);
+  const one = clone(cp); one.steps = [clone(cp.steps.find((s) => s.type !== 'branch'))];
+  ok('phase 付き工程1個 → true', !!one.steps[0].phase && C.phaseComplete(one) === true);
+  const miss = clone(cp); const t = miss.steps.find((s) => s.type !== 'branch'); delete t.phase;
+  ok('1工程でも phase なし → false', C.phaseComplete(miss) === false);
+  const onlyBranch = clone(R('rodev-90').variants[0]); onlyBranch.steps = [{ type: 'branch', id: 'b', options: [{ id: 'x', label: 'x', steps: [] }] }];
+  ok('分岐だけで中身が空 → false', C.phaseComplete(onlyBranch) === false);
+}
+
+console.log('v1.1.5-5. 下準備の仕上がり目安は0より大きい');
+{
+  const cp = R('cream-pan').variants[0];
+  const y = (x) => { const v = clone(cp); v.ingredientGroups.find((g) => g.id === 'custard').batch.yieldPerUnit = x; return C.validateVariant(v); };
+  ok('yieldPerUnit -10：保存不可', y(-10).length > 0);
+  ok('yieldPerUnit 0：保存不可', y(0).length > 0);
+  ok('yieldPerUnit 145：保存可', y(145).length === 0);
+  ok('yieldPerUnit 未入力（null）：保存可（仕上がり警告は別）', y(null).length === 0);
+  const b = (k, x) => { const v = clone(cp); v.ingredientGroups.find((g) => g.id === 'custard').batch[k] = x; return C.validateVariant(v); };
+  ok('unit 0 / -1 / 1.5：保存不可', [0, -1, 1.5].every((x) => b('unit', x).length > 0));
+  ok('maxUnitsPerCook 0 / 2.5：保存不可', [0, 2.5].every((x) => b('maxUnitsPerCook', x).length > 0));
+  ok('unit 4 / maxUnitsPerCook 2：保存可', b('unit', 4).length === 0 && b('maxUnitsPerCook', 2).length === 0);
+}
+
+console.log('v1.1.6-1. 材料名が空欄の行は保存しない');
+{
+  const an = R('anpan').variants[0];
+  const blankName = (nm) => { const v = clone(an); v.ingredientGroups.find((g) => g.kind === 'flour').items.find((x) => x.id === 'kitano').name = nm; return C.validateVariant(v); };
+  ok('あんぱんのキタノカオリの名前だけ空欄：保存不可', blankName('').length > 0, blankName('').join());
+  ok('空白だけの名前：保存不可', blankName('　 ').length > 0);
+  ok('名前 null：保存不可', blankName(null).length > 0);
+  ok('エラー文は削除ボタンを案内', blankName('').some((m) => /空欄/.test(m) && /削除/.test(m)));
+  ok('名前あり：保存可', blankName('キタノカオリ').length === 0);
+  const f = clone(R('curry-pan').variants[0]); f.ingredientGroups.find((g) => g.id === 'finish').items.find((x) => x.id === 'panko').name = '';
+  ok('適量（text）の材料（パン粉）も名前は必須', C.validateVariant(f).length > 0);
+}
+
+console.log('v1.1.6-2. 工程が0件なら保存しない');
+{
+  const cp = R('cream-pan').variants[0];
+  const e = clone(cp); e.steps = [];
+  ok('steps=[]：保存不可', C.validateVariant(e).some((m) => /工程を1つ以上/.test(m)));
+  const u = clone(cp); delete u.steps;
+  ok('steps なし：保存不可（落ちない）', C.validateVariant(u).some((m) => /工程を1つ以上/.test(m)));
+  const rd = R('rodev-90').variants[0];
+  const pb = C.planBranch(rd);
+  const b = clone(rd); b.steps = [clone(pb)]; b.steps[0].options.forEach((o) => { o.steps = []; });
+  ok('分岐だけで全 option の steps=[]：保存不可', C.validateVariant(b).some((m) => /工程を1つ以上/.test(m)));
+  const b2 = clone(rd); b2.steps = [clone(pb)];
+  ok('分岐の中に工程があれば数える：保存可', C.validateVariant(b2).length === 0, C.validateVariant(b2).join());
+  const one = clone(cp); one.steps = [clone(cp.steps[0])];
+  ok('1工程以上：保存可', C.validateVariant(one).length === 0, C.validateVariant(one).join());
+  const fl = C.flattenSteps(b2.steps, { [pb.id]: pb.options[0].id }).list;
+  ok('計画の分岐が先頭でも、作り始める工程は計画の中の最初の工程', fl.length > 0 && fl[0].step.type !== 'branch' && fl[0].step.id === pb.options[0].steps[0].id);
+  ok('標準レシピは展開した先頭の工程 = steps[0]（開始位置は従来どおり）', seeds.every((r) => r.variants.every((v) => { const p = C.planBranch(v); return C.flattenSteps(v.steps, p ? { [p.id]: p.options[0].id } : {}).list[0].step === v.steps[0]; })));
+}
+
+console.log('v1.1.6-3. 冷蔵は最短・最長とも必須');
+{
+  const rd = R('rodev-90').variants[0];
+  const cold = (minH, maxH) => { const v = clone(rd); C.findStep(v.steps, 'cd-cold').cold = { minH, maxH }; return C.validateVariant(v); };
+  ok('ロデヴに冷蔵工程がある', !!C.findStep(rd.steps, 'cd-cold')?.cold);
+  ok('minH=8 / maxH=null：保存不可', cold(8, null).length > 0);
+  ok('minH=null / maxH=null：保存不可', cold(null, null).length > 0);
+  ok('minH=null / maxH=15：保存不可', cold(null, 15).length > 0);
+  ok('minH=0 / maxH=15：保存不可', cold(0, 15).length > 0);
+  ok('minH=8 / maxH=15：保存可', cold(8, 15).length === 0);
+  ok('minH=15 / maxH=8：保存不可', cold(15, 8).some((m) => /最長/.test(m)));
+  ok('minH=8 / maxH=8：保存可', cold(8, 8).length === 0);
+  const cp = R('cream-pan').variants[0];
+  const tm = (t) => { const v = clone(cp); v.steps.find((x) => x.timer).timer = t; return C.validateVariant(v); };
+  ok('timer は最長なしでも保存可（従来どおり）', tm({ min: 10 }).length === 0);
+  ok('timer.min=0：保存不可', tm({ min: 0 }).length > 0);
+  ok('timer.max=0：保存不可', tm({ min: 10, max: 0 }).length > 0);
+  const fe = (f) => { const v = clone(cp); const s = v.steps.find((x) => x.ferment); Object.assign(s.ferment, f); return C.validateVariant(v); };
+  ok('ferment.min=0：保存不可', fe({ min: 0 }).length > 0);
+}
+
+/* ───────────────────────── V1.5 ───────────────────────── */
+const V15_META = (r) => { // v1.1.6 までの保存データを再現：V1.5 で足したメタデータを外す
+  const x = clone(r);
+  for (const v of x.variants) {
+    delete v.mix;
+    if (v.dough?.familyId !== 'basic-sweet-dough') delete v.dough;
+    C.eachStep(v.steps, (st) => {
+      if (['rodev-90', 'shokupan-junnama', 'curry-pan'].includes(r.id)) { delete st.phase; delete st.bake; if (st.ferment) { delete st.ferment.tempMin; delete st.ferment.tempMax; } }
+      if (st.ferment) delete st.ferment.tempMode;
+      if (st.bake) delete st.bake.method;
+    });
+  }
+  return x;
+};
+const canon = (o) => JSON.stringify(o, (k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v));
+// loose：v1.1.0 で付与済みの甘い生地は tempMode・method を持たない（判定では range・oven として扱う）
+const stepMeta = (v, loose = false) => { const out = []; C.eachStep(v.steps, (st) => { const b = st.bake ? { ...st.bake } : null; if (loose && b) delete b.method; out.push([st.id, st.phase ?? null, b, st.ferment ? [loose ? null : st.ferment.tempMode ?? null, st.ferment.tempMin ?? null, st.ferment.tempMax ?? null] : null]); }); return canon(out); };
+
+console.log('v1.5-1. 標準レシピの構造化データ');
+{
+  ok('SEED_VERSION 7', SEED_VERSION === 7);
+  ok('全 variant が phaseComplete', seeds.every((r) => r.variants.every((v) => C.phaseComplete(v))));
+  const rd = R('rodev-90').variants[0];
+  ok('ロデヴ：系統 lean-high-hydration', rd.dough?.familyId === 'lean-high-hydration');
+  const amb = []; C.eachStep(rd.steps, (st) => { if (st.ferment) amb.push(st.ferment.tempMode); });
+  ok('ロデヴ：室温発酵はすべて tempMode:ambient（数値にしない）', amb.length === 3 && amb.every((x) => x === 'ambient') && (() => { let n = 0; C.eachStep(rd.steps, (st) => { if (st.ferment && (st.ferment.tempMin != null || st.ferment.tempMax != null)) n++; }); return n === 0; })());
+  const bk = []; C.eachStep(rd.steps, (st) => { if (st.phase === 'bake') bk.push(st.bake); });
+  ok('ロデヴ：焼成工程は計画ごとに2つ（250℃スチーム10分 → 230℃ 15〜18分）', bk.length === 4 && bk[0].temp === 250 && bk[0].steam === true && bk[0].min === 10 && bk[1].temp === 230 && bk[1].steam === false && bk[1].max === 18);
+  ok('ロデヴ：冷蔵発酵は phase:dough', C.findStep(rd.steps, 'cd-cold').phase === 'dough');
+  const sh = R('shokupan-junnama').variants;
+  ok('食パン A/B/C は同じ系統 rich-shokupan', sh.every((v) => v.dough?.familyId === 'rich-shokupan'));
+  ok('食パン A だけ mix:false', sh[0].mix === false && sh[1].mix == null && sh[2].mix == null);
+  const cu = R('curry-pan').variants[0];
+  const fry = C.findStep(cu.steps, 'c7');
+  ok('カレーパン：揚げは phase:bake ＋ method:fry', fry.phase === 'bake' && fry.bake.method === 'fry' && fry.bake.tempMin === 170 && fry.bake.tempMax === 175);
+  ok('カレーパン：系統 curry-bread-dough', cu.dough?.familyId === 'curry-bread-dough');
+  ok('新しい系統が DOUGH_FAMILIES にある', (() => { const f = DOUGH_FAMILIES; return f['lean-high-hydration'] && f['rich-shokupan'] && f['curry-bread-dough']; })());
+  ok('seedRev は上げていない（メタデータのみ）', R('curry-pan').seedRev === 2 && R('rodev-90').seedRev === 3 && R('shokupan-junnama').seedRev === 3 && R('anpan').seedRev === 2 && R('cream-pan').seedRev === 1 && R('choco-pan').seedRev === 1);
+}
+
+console.log('v1.5-2. SEED_VERSION 6 → 7 の移行（メタデータだけ）');
+{
+  const olds = seeds.map(V15_META);
+  for (const r of olds) { r.version = 3; r.changeLog = [{ version: 1, note: '初期登録' }]; }
+  const before = olds.map((r) => ({ id: r.id, seedRev: r.seedRev, userEdited: r.userEdited, version: r.version, log: r.changeLog.length }));
+  const changed = migrateRecipes(olds, 6);
+  for (const r of olds) {
+    const sr = R(r.id);
+    const loose = !['rodev-90', 'shokupan-junnama', 'curry-pan'].includes(r.id);
+    ok(`未編集 ${r.id}：工程メタデータが標準と一致`, r.variants.every((v, i) => stepMeta(v, loose) === stepMeta(sr.variants[i], loose)), r.variants.map((v) => stepMeta(v, loose)).join().slice(0, 200));
+    ok(`未編集 ${r.id}：系統が付く`, r.variants.every((v, i) => v.dough?.familyId === sr.variants[i].dough?.familyId));
+  }
+  ok('食パン A に mix:false が付く', olds.find((r) => r.id === 'shokupan-junnama').variants[0].mix === false);
+  ok('seedRev・userEdited・version・changeLog は変えない（標準版の更新通知を出さない）', olds.every((r, i) => r.seedRev === before[i].seedRev && r.userEdited === before[i].userEdited && r.version === before[i].version && r.changeLog.length === before[i].log));
+  ok('変更したレシピだけ保存対象（ロデヴ・食パン・カレーパン）', ['rodev-90', 'shokupan-junnama', 'curry-pan'].every((id) => changed.some((x) => x.id === id)));
+  ok('移行後のロデヴ・食パン・カレーパンも入力チェックを通る', olds.every((r) => r.variants.every((v) => C.validateVariant(v).length === 0)));
+
+  // 編集済み：工程の条件を変えたロデヴ → 工程メタデータは付けない。配合が同じなら系統は付ける
+  const e1 = V15_META(R('rodev-90')); e1.userEdited = true;
+  C.findStep(e1.variants[0].steps, 'td-bake2').timer.max = 20;
+  migrateRecipes([e1], 6);
+  ok('編集済みロデヴ（焼成②を15〜20分）：phase は付けない', !C.phaseComplete(e1.variants[0]) && (() => { let n = 0; C.eachStep(e1.variants[0].steps, (st) => { if (st.phase || st.bake || st.ferment?.tempMode) n++; }); return n === 0; })());
+  ok('   配合は同じなので系統は付く', e1.variants[0].dough?.familyId === 'lean-high-hydration');
+  // 配合を変えたロデヴ → 系統も付けない。工程が同じなら phase は付く
+  const e2 = V15_META(R('rodev-90')); e2.userEdited = true;
+  e2.variants[0].ingredientGroups[1].items.find((x) => x.id === 'salt').pct.target = 2.4;
+  migrateRecipes([e2], 6);
+  ok('配合を変えたロデヴ：系統は付けない', !e2.variants[0].dough?.familyId);
+  ok('   工程が標準と同じなら phase は付く', C.phaseComplete(e2.variants[0]));
+  // 冷蔵の本文だけ違う → 付く（本文は焼成工程以外は比較しない）／焼成①の本文が違う → 付かない
+  const e3 = V15_META(R('rodev-90')); C.findStep(e3.variants[0].steps, 'cd-cold').body = '一晩冷蔵';
+  migrateRecipes([e3], 6);
+  ok('焼成以外の本文だけ違う：付く', C.phaseComplete(e3.variants[0]));
+  const e4 = V15_META(R('rodev-90')); C.findStep(e4.variants[0].steps, 'td-bake1').body = '260℃・スチームあり。';
+  migrateRecipes([e4], 6);
+  ok('焼成①の本文が違う：付かない', !C.phaseComplete(e4.variants[0]));
+  // HB の使い方を変えた食パン A には mix:false を付けない
+  const e5 = V15_META(R('shokupan-junnama')); e5.variants[0].hb.mode = 'knead_first_fermentation';
+  migrateRecipes([e5], 6);
+  ok('HBの使い方を変えた食パン A：mix:false を付けない', e5.variants[0].mix == null);
+  // 甘い生地（v1.1.0 で付与済み）は何も変わらない
+  const sw = V15_META(R('cream-pan')); const snap = canon(sw);
+  const ch = migrateRecipes([sw], 6);
+  ok('甘い生地（付与済み）は触らない', canon(sw) === snap && !ch.length);
+  ok('   tempMode・method がない v1.1 データでも同時製作の判定は同じ', C.compatVariants(sw.variants[0], R('anpan').variants[0]).level === 'same');
+  // 2回目は何もしない
+  ok('移行は1回だけ効く（2回目は変更なし）', migrateRecipes(olds, 6).length === 0);
+}
+
+console.log('v1.5-3. 同時製作の判定：標準レシピ');
+{
+  const cv = (a, b) => C.compatVariants(a, b);
+  for (let i = 0; i < sweet.length; i++) for (let j = 0; j < sweet.length; j++) if (i !== j) ok(`${sweet[i][0]} × ${sweet[j][0]}：同じ生地で同時に作れる`, cv(sweet[i][1], sweet[j][1]).level === 'same', JSON.stringify(cv(sweet[i][1], sweet[j][1]).reasons));
+  const c = cv(sweet[2][1], sweet[0][1]);
+  ok('理由：分割・一次発酵・二次発酵・焼成', ['shape', 'primary', 'proof', 'bake'].every((k) => c.reasons.some((x) => x.key === k && x.status === 'ok')), JSON.stringify(c.reasons));
+  const hb = cv(sweet[2][1], sweet[1][1]);
+  ok('HB一次発酵 × 手ごね28〜30℃：注記（判定は下げない）', hb.level === 'same' && hb.reasons.find((x) => x.key === 'primary').status === 'note');
+  const sh = R('shokupan-junnama').variants;
+  ok('食パン B × C：同じ生地で同時に作れる（型 12cm角）', cv(sh[1], sh[2]).level === 'same' && cv(sh[1], sh[2]).reasons.some((x) => x.key === 'shape' && /12×12×12/.test(x.text)));
+  ok('食パン A × B：同じ系統・配合違い', cv(sh[0], sh[1]).level === 'family' && cv(sh[0], sh[1]).diff.length > 0);
+  const a2 = clone(sh[0]);
+  const na = cv(sh[0], a2);
+  ok('食パン A × 同じ配合：同じ配合（同時製作判定なし）・理由は HB全自動', na.level === 'nojudge' && na.reasons.some((x) => x.key === 'mix' && /HB全自動/.test(x.text)) && !na.reasons.some((x) => /データ不足/.test(x.text)));
+  const m2 = clone(sweet[2][1]); m2.mix = false; m2.hb = { mode: 'none' };
+  ok('mix:false（HB全自動以外）の理由は「対象外に設定」', cv(sweet[0][1], m2).reasons.some((x) => x.key === 'mix' && /対象外に設定/.test(x.text)));
+  ok('ロデヴ・カレーパン × 甘い生地：関係なし（別系統・別配合）', cv(R('rodev-90').variants[0], sweet[0][1]).level === null && cv(R('curry-pan').variants[0], sweet[0][1]).level === null);
+  const rd = R('rodev-90').variants[0];
+  const rr = cv(rd, clone(rd));
+  ok('ロデヴ × 同じロデヴ：同じ生地で同時に作れる（計画ごと：当日×当日・冷蔵×冷蔵）', rr.level === 'same' && rr.plans.length === 2 && rr.plans.every((p) => p.a === p.b && p.level === 'same'), JSON.stringify(rr.plans.map((p) => [p.a, p.b, p.level])));
+  ok('   室温同士の発酵は一致', rr.reasons.find((x) => x.key === 'proof').status === 'ok' && /室温/.test(rr.reasons.find((x) => x.key === 'proof').text));
+}
+
+console.log('v1.5-4. 発酵温度（ambient と数値範囲）');
+{
+  const T = (f) => C.fermentTemp(f);
+  ok('28〜30 × 30〜32：端点一致で互換', C.compareTemp(T({ tempMin: 28, tempMax: 30 }), T({ tempMin: 30, tempMax: 32 })) === 'ok');
+  ok('28〜30 × 31〜33：重ならない', C.compareTemp(T({ tempMin: 28, tempMax: 30 }), T({ tempMin: 31, tempMax: 33 })) === 'ng');
+  ok('ambient × ambient：互換', C.compareTemp(T({ temp: '室温', tempMode: 'ambient' }), T({ tempMode: 'ambient' })) === 'ok');
+  ok('ambient × 数値：判定不能（不一致ではない）', C.compareTemp(T({ tempMode: 'ambient' }), T({ tempMin: 20, tempMax: 25 })) === 'unknown');
+  ok('表示文字列「室温」だけでは ambient にしない', T({ temp: '室温' }).mode === 'unknown');
+  ok('不足値：判定不能', C.compareTemp(T({ temp: '32〜35℃' }), T({ tempMin: 32, tempMax: 35 })) === 'unknown' && C.compareTemp(T(null), T({ tempMode: 'ambient' })) === 'unknown');
+  ok('tempMode 未指定でも数値があれば range（v1.1 データ）', T({ tempMin: 32, tempMax: 35 }).mode === 'range');
+  const rd = R('rodev-90').variants[0];
+  const x = clone(rd); for (const id of ['td-ferm2', 'cd-ferm2']) { const f = C.findStep(x.steps, id).ferment; f.tempMode = 'range'; f.tempMin = 24; f.tempMax = 27; }
+  const c = C.compatVariants(rd, x);
+  ok('最終発酵 室温 × 24〜27℃：同じ配合（同時製作判定なし）', c.level === 'nojudge' && c.reasons.find((y) => y.key === 'proof').status === 'unknown', JSON.stringify(c.reasons));
+  const y = clone(sweet[2][1]); Object.assign(y.steps.find((s) => s.phase === 'proof').ferment, { tempMin: 36, tempMax: 38 });
+  const d = C.compatVariants(sweet[0][1], y);
+  ok('二次発酵 32〜35 × 36〜38：生地は一緒に仕込める（途中から別工程）・理由「二次発酵が違う」', d.level === 'split' && d.label === '生地は一緒に仕込める（途中から別工程）' && d.reasons.some((r) => r.key === 'proof' && r.status === 'ng' && /二次発酵が違う/.test(r.text)));
+  const z = clone(sweet[1][1]); Object.assign(z.steps.find((s) => s.id === 'h7').ferment, { tempMin: 35, tempMax: 38 });
+  const zz = clone(sweet[1][1]);
+  ok('一次発酵 28〜30 × 35〜38：一次発酵が違う', C.compatVariants(zz, z).reasons.some((r) => r.key === 'primary' && r.status === 'ng'));
+  ok('計画の並び順が違っても同じ id どうしで比べる', (() => { const b = clone(rd); C.planBranch(b).options.reverse(); const c2 = C.compatVariants(rd, b); return c2.plans.length === 2 && c2.plans.every((p) => p.a === p.b && p.level === 'same'); })());
+  const ren = clone(rd); for (const o of C.planBranch(ren).options) o.id = o.id + '2';
+  const cr = C.compatVariants(rd, ren);
+  const tc = cr.plans.find((p) => p.a === 'today' && p.b === 'cold2');
+  ok('共通の計画 id がなければ全組み合わせ（4通り）・最良を全体の判定に', cr.plans.length === 4 && cr.level === 'same');
+  ok('当日（室温の一次発酵）× 冷蔵発酵：一次発酵が違う', tc && tc.level === 'split' && tc.reasons.some((r) => r.key === 'primary' && r.status === 'ng'), JSON.stringify(tc?.reasons));
+}
+
+console.log('v1.5-5. 焼成（温度は完全一致・多段焼成）');
+{
+  const base = sweet[0][1];
+  const edit = (f) => { const v = clone(sweet[2][1]); f(v.steps.find((s) => s.phase === 'bake').bake, v); return C.compatVariants(base, v); };
+  const t190 = edit((b) => { b.temp = 190; });
+  ok('180℃ × 190℃：別条件（±10℃は一致にしない）', t190.level === 'split' && t190.reasons.some((r) => r.key === 'bake' && r.status === 'ng' && /180℃.*190℃/.test(r.text)), JSON.stringify(t190.reasons));
+  ok('予熱 190 × 200：別条件', edit((b) => { b.preheat = 200; }).level === 'split');
+  ok('スチームあり × なし：別条件', edit((b) => { b.steam = true; }).level === 'split');
+  const t2 = edit((b) => { b.min = 15; b.max = 18; });
+  ok('単段 12〜15分 × 15〜18分：判定は下げず、時間差を注記', t2.level === 'same' && t2.reasons.some((r) => r.key === 'bakeTime' && r.status === 'note' && /12〜15分／15〜18分/.test(r.text)), JSON.stringify(t2.reasons));
+  ok('method 未指定は oven として扱う', edit((b) => { delete b.method; }).level === 'same');
+  ok('oven × fry：加熱方法が違う', edit((b) => { b.method = 'fry'; b.tempMin = 180; b.tempMax = 180; }).level === 'split');
+  ok('焼成条件が欠けている（bake なし）：判定不能', edit((b, v) => { delete v.steps.find((s) => s.phase === 'bake').bake; }).level === 'nojudge');
+  const rd = R('rodev-90').variants[0];
+  const r2 = (f) => { const v = clone(rd); for (const p of ['td', 'cd']) f(C.findStep(v.steps, `${p}-bake1`).bake, C.findStep(v.steps, `${p}-bake2`).bake, v, p); return C.compatVariants(rd, v); };
+  const s1 = r2((b1) => { b1.min = 15; b1.max = 15; });
+  ok('多段：第1段 10分 × 15分：別条件（温度切替の時刻が違う）', s1.level === 'split' && s1.reasons.some((r) => r.key === 'bake' && r.status === 'ng'), JSON.stringify(s1.reasons));
+  const s2 = r2((b1, b2) => { b2.min = 15; b2.max = 20; });
+  ok('多段：最終段 15〜18 × 15〜20分：互換＋注記', s2.level === 'same' && s2.reasons.some((r) => r.key === 'bakeTime'), JSON.stringify(s2.reasons));
+  const s3 = r2((b1, b2) => { b2.temp = 240; });
+  ok('多段：第2段 230 × 240℃：別条件', s3.level === 'split');
+  const s4 = r2((b1, b2, v, p) => { const i = (arr) => { const k = arr.findIndex((x) => x.id === `${p}-bake2`); if (k >= 0) arr.splice(k, 1); arr.forEach((x) => x.options && x.options.forEach((o) => i(o.steps))); }; i(v.steps); });
+  ok('多段：焼成工程の数が違う（2段 × 1段）：同一焼成にしない', s4.level === 'split' && s4.reasons.some((r) => r.key === 'bake' && r.status === 'ng'));
+  const cu = R('curry-pan').variants[0];
+  const f1 = clone(cu); C.findStep(f1.steps, 'c7').bake = { method: 'oven', temp: 200, preheat: 210, min: 15, max: 18, steam: false };
+  const fr = C.compatVariants(cu, f1);
+  ok('同じカレーパン生地で 揚げ × 焼き：配合は同じ・加熱方法が違う', fr.level === 'split' && fr.reasons.some((r) => r.key === 'bake' && r.status === 'ng' && /揚げ/.test(r.text)), JSON.stringify(fr.reasons));
+  const f2 = clone(cu); C.findStep(f2.steps, 'c7').bake.tempMax = 180;
+  ok('揚げ温度 170〜175 × 170〜180：別条件', C.compatVariants(cu, f2).level === 'split');
+  ok('カレーパン同士：同じ生地で同時に作れる（一次発酵なし同士）', C.compatVariants(cu, clone(cu)).level === 'same');
+}
+
+console.log('v1.5-6. 分割重量・型');
+{
+  const a = sweet[0][1];
+  const b = clone(sweet[2][1]); b.baseCount = 10;
+  const c = C.compatVariants(a, b);
+  ok('分割 48.7g × 10個分割：分割が違う', c.level === 'split' && c.reasons.some((r) => r.key === 'shape' && r.status === 'ng'));
+  const b1 = clone(sweet[2][1]); b1.baseFlour = 200.5;   // 1個あたり +0.12g 程度
+  ok('分割重量 ±1g 以内は同じ', C.compatVariants(a, b1).reasons.find((r) => r.key === 'shape').status === 'ok');
+  const B = R('shokupan-junnama').variants[1];
+  const sw = clone(B); sw.basePan = { ...B.basePan, w: 20, d: 12 };
+  const sw2 = clone(B); sw2.basePan = { ...B.basePan, w: 12, d: 20 };
+  sw.baseFlour = sw2.baseFlour = 250 * 20 / 12;
+  ok('型 12×20 と 20×12 は同じ型', C.panKey(sw.basePan) === C.panKey(sw2.basePan) && C.compatVariants(sw, sw2).reasons.find((r) => r.key === 'shape').status === 'ok');
+  const tall = clone(B); tall.basePan = { ...B.basePan, h: 14 };
+  ok('型 12×12×12 × 12×12×14：型が違う', C.compatVariants(B, tall).reasons.find((r) => r.key === 'shape').status === 'ng');
+  const more = clone(B); more.baseFlour = 260;
+  ok('同じ型で容積あたりの粉量が違う：違う', C.compatVariants(B, more).reasons.find((r) => r.key === 'shape').status === 'ng');
+  const fp = clone(B); fp.baseFlour = 250 + 1e-10;
+  ok('浮動小数の誤差は同じ扱い', C.compatVariants(B, fp).reasons.find((r) => r.key === 'shape').status === 'ok');
+  const piece = clone(B); piece.scaleMode = 'flour'; piece.baseCount = 2;
+  ok('型焼き × 分割：成形が違う', C.compatVariants(B, piece).reasons.find((r) => r.key === 'shape').status === 'ng');
+  const nocount = clone(R('rodev-90').variants[0]); delete nocount.baseCount;
+  ok('分割数なし：判定不能（違うとは言わない）', C.compatVariants(R('rodev-90').variants[0], nocount).level === 'nojudge');
+}
+
+console.log('v1.5-7. 判定の優先順位・variant 単位');
+{
+  const a = sweet[0][1];
+  const x = clone(sweet[2][1]);
+  x.steps.find((s) => s.phase === 'bake').bake.temp = 200;         // 条件違い
+  delete x.steps.find((s) => s.phase === 'shape').phase;           // かつデータ不足
+  const c = C.compatVariants(a, x);
+  ok('データ不足と条件違いが両方 → データ不足を優先（同時製作判定なし）', c.level === 'nojudge' && c.reasons.some((r) => /工程データ不足/.test(r.text)));
+  const m = clone(sweet[2][1]); m.mix = false; delete m.steps[0].phase;
+  ok('mix:false とデータ不足 → mix:false を優先', C.compatVariants(a, m).reasons[0].key === 'mix');
+  // 編集で二次発酵を変えた → stripStaleMixMeta で外れる → 判定なし（「違う」とは言わない）
+  const before = clone(sweet[2][1]); const after = clone(before);
+  after.steps.find((s) => s.id === 'cp-ferm2').ferment.temp = '30〜32℃';
+  C.stripStaleMixMeta(before, after);
+  ok('編集で工程条件を変えた variant：tempMode も外れる', after.steps.every((s) => !s.ferment || s.ferment.tempMode == null));
+  ok('   → 同じ配合（同時製作判定なし）', C.compatVariants(a, after).level === 'nojudge');
+  // variant 単位：あんぱん A は互換、B は条件違い → 情報を失わない
+  const an = clone(R('anpan'));
+  Object.assign(an.variants[1].steps.find((s) => s.phase === 'proof').ferment, { tempMin: 38, tempMax: 40 });
+  const cp = R('cream-pan').variants[0];
+  const res = an.variants.map((v) => C.compatVariants(cp, v).level);
+  ok('あんぱん A は same、B は split（variant ごとに保持）', res[0] === 'same' && res[1] === 'split', res.join());
+  ok('配合違い・同じ系統：family（差分つき）', (() => { const s2 = clone(cp); s2.ingredientGroups[1].items[0].name = '豆乳'; delete s2.ingredientGroups[1].items[0].ingKey; const r = C.compatVariants(a, s2); return r.level === 'family' && r.diff.some((d) => /豆乳/.test(d)); })());
+  ok('配合違い・系統なし：関係なし', (() => { const s2 = clone(cp); s2.ingredientGroups[1].items[0].pct.target = 70; delete s2.dough; return C.compatVariants(a, s2).level === null; })());
+  ok('ラベル4種', C.COMPAT_LEVELS.same === '同じ生地で同時に作れる' && C.COMPAT_LEVELS.split === '生地は一緒に仕込める（途中から別工程）' && C.COMPAT_LEVELS.nojudge === '同じ配合（同時製作判定なし）' && C.COMPAT_LEVELS.family === '同じ系統・配合違い');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

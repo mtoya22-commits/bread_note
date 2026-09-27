@@ -1,6 +1,6 @@
 // パンノート service worker — offline app shell.
 // デプロイで中身を変えたら VERSION を上げてください（古いキャッシュが破棄されます）。
-const VERSION = 'bread-note-v1.1.1';
+const VERSION = 'bread-note-v1.5.0';
 const ASSETS = [
   './', './index.html', './styles.css',
   './app.js', './app.js?v=2', './db.js', './calc.js', './seed.js',
@@ -19,18 +19,15 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+// ネットワーク優先：オンラインなら常に最新のファイルを使い、取れたものはキャッシュを更新する。
+// オフラインのときだけキャッシュから返す（更新後の最初の起動から新しい版が動く）。
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
-  if (req.mode === 'navigate') {
-    // network first for the page so updates arrive; fall back to cached shell offline
-    e.respondWith(fetch(req).catch(() => caches.match('./index.html')));
-    return;
-  }
   e.respondWith(
-    caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+    fetch(req, { cache: 'no-cache' }).then((res) => {
       if (res.ok) { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(req, copy)); }
       return res;
-    }))
+    }).catch(() => caches.match(req).then((hit) => hit || (req.mode === 'navigate' ? caches.match('./index.html') : Response.error())))
   );
 });

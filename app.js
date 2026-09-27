@@ -1,8 +1,8 @@
 import * as db from './db.js';
-import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited, DOUGH_FAMILIES } from './seed.js';
+import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited, DOUGH_FAMILIES, applyStepMeta } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '1.1.1';
+export const APP_VERSION = '1.5.0';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -123,6 +123,7 @@ let lastRouteKey = '';
 function render(keepScroll = false) {
   S.route = parseRoute();
   const r = S.route;
+  if (r.name !== 'edit') S.ui.edit = null;   // 保存せずに編集画面を離れたら、下書きは捨てる
   const key = location.hash;
   const scrollY = window.scrollY;
   let html = '';
@@ -381,32 +382,37 @@ function vRecipe(id) {
   </div>`;
 }
 
-/* 生地カード：同じ配合／同じ系統・配合違い（同じレシピの別バリエーションは出さない） */
+/* 生地カード（V1.5）：同じ生地で同時に作れるか。判定は variant 対 variant（calc.js の compatVariants）。
+   同じレシピの別バリエーションは出さない。数量・HB容量・天板容量は判定に含まない */
 const familyName = (v) => DOUGH_FAMILIES[v.dough?.familyId]?.name || v.dough?.familyName || v.dough?.familyId || '';
 function doughRelations(r, v) {
-  const fid = v.dough?.familyId;
-  if (!fid) return null;
-  const sig = C.doughSignature(v);
-  const same = [], diff = [];
+  const out = { same: [], split: [], nojudge: [], family: [] };
   for (const o of S.recipes) {
     if (o.id === r.id) continue;
-    const vs = o.variants.filter((x) => x.dough?.familyId === fid);
-    if (!vs.length) continue;
-    const hit = vs.filter((x) => C.doughSignature(x) === sig);
-    if (hit.length) same.push({ r: o, v: hit[0], partial: hit.length < o.variants.length && o.variants.length > 1 });
-    else diff.push({ r: o, v: vs[0], d: C.doughDiff(v, vs[0]) });
+    for (const x of o.variants) {
+      const c = C.compatVariants(v, x, { a: o.variants.length > 1 || r.variants.length > 1 ? `${r.name}・${v.name}` : r.name, b: o.variants.length > 1 ? `${o.name}・${x.name}` : o.name });
+      if (c.level) out[c.level].push({ r: o, v: x, c, multi: o.variants.length > 1 });
+    }
   }
-  return { fid, same, diff };
+  return out;
 }
+const COMPAT_MARK = { ok: '✓', ng: '✗', unknown: '？', note: '※', off: '－' };
 function doughCard(r, v) {
   const rel = doughRelations(r, v);
-  if (!rel) return '';
-  const link = (x) => `<button class="dough-link" data-act="goto-recipe" data-r="${x.r.id}" data-v="${x.v.id}">${CAT_EMOJI[x.r.category] || '🍞'} ${esc(x.r.name)}${x.partial ? `<span class="muted small">（${esc(x.v.name)}）</span>` : ''}</button>`;
+  const n = rel.same.length + rel.split.length + rel.nojudge.length;
+  if (!v.dough?.familyId && !n) return '';
+  const chips = (c) => c.reasons.length ? `<div class="dc-chips">${c.reasons.map((x) => `<span class="dc-chip c-${x.status}">${COMPAT_MARK[x.status] || ''} ${esc(x.text)}</span>`).join('')}</div>` : '';
+  const planNote = (c) => c.plans.length ? `<div class="dc-diff">${c.plans.map((p) => `${esc(p.a || '')}${p.b && p.b !== p.a ? `×${esc(p.b)}` : ''}：${esc(C.COMPAT_LEVELS[p.level])}`).join('／')}</div>` : '';
+  const row = (x) => `<div class="dc-row"><button class="dough-link" data-act="goto-recipe" data-r="${x.r.id}" data-v="${x.v.id}">${CAT_EMOJI[x.r.category] || '🍞'} ${esc(x.r.name)}${x.multi ? `<span class="muted small">（${esc(x.v.name)}）</span>` : ''}</button>${chips(x.c)}${planNote(x.c)}</div>`;
+  const sec = (k, list) => list.length ? `<div class="dc-sub dc-${k}">${esc(C.COMPAT_LEVELS[k])}</div><div class="dc-list">${list.map(row).join('')}</div>` : '';
+  const fam = rel.family.length ? `<div class="dc-sub dc-family">${esc(C.COMPAT_LEVELS.family)}</div><div class="dc-list">${rel.family.map((x) => `<div class="dc-row"><button class="dough-link" data-act="goto-recipe" data-r="${x.r.id}" data-v="${x.v.id}">${CAT_EMOJI[x.r.category] || '🍞'} ${esc(x.r.name)}${x.multi ? `<span class="muted small">（${esc(x.v.name)}）</span>` : ''}</button><div class="dc-diff">${esc(x.c.diff.slice(0, 3).join('、'))}${x.c.diff.length > 3 ? ' ほか' : ''}</div></div>`).join('')}</div>` : '';
   return `
   <div class="card dough-card">
-    <div class="dc-h"><span class="dc-k">生地</span><b>${esc(familyName(v))}</b></div>
-    ${rel.same.length ? `<div class="dc-sub">同じ配合から作れるパン</div><div class="dc-list">${rel.same.map(link).join('')}</div>` : '<div class="muted small">同じ配合のほかのパンはまだありません</div>'}
-    ${rel.diff.length ? `<div class="dc-sub">同じ系統・配合違い</div><div class="dc-list">${rel.diff.map((x) => `${link(x)}<div class="dc-diff">${esc(x.d.slice(0, 3).join('、'))}${x.d.length > 3 ? ' ほか' : ''}</div>`).join('')}</div>` : ''}
+    <div class="dc-h"><span class="dc-k">生地</span><b>${esc(familyName(v) || '系統なし')}</b></div>
+    ${v.mix === false ? `<div class="muted small">${v.hb?.mode === 'full_auto' ? 'HB全自動のため、同時製作の対象外です' : '同時製作の対象外に設定されています'}</div>` : ''}
+    ${n ? sec('same', rel.same) + sec('split', rel.split) + sec('nojudge', rel.nojudge) : '<div class="muted small">同じ配合のほかのパンはまだありません</div>'}
+    ${fam}
+    ${n ? '<div class="dc-foot">工程の条件だけの判定です。数量・HB容量・天板容量はこの判定に含みません</div>' : ''}
   </div>`;
 }
 
@@ -422,7 +428,10 @@ function scalePanel(r, v, sc) {
       </div>
       <div class="scale-note">粉 ${Math.round(sc.flour)}g（基準 ${v.baseCount}${esc(v.countUnit || '個')}・${v.baseFlour}g）</div>`;
   } else if (v.scaleMode === 'panVolume') {
-    const pan = sc.pan;
+    // 入力中の寸法は無効でもそのまま見せる（計算は scaleFor が基準の型へ戻す）
+    const inPan = scaleInput(r, v).pan;
+    const pan = inPan?.custom ? inPan : sc.pan;
+    const panBad = !!inPan && !(C.panVolume(inPan) > 0);
     const presetId = pan.custom ? 'custom' : C.PAN_PRESETS.find((p) => p.w === pan.w && p.d === pan.d && p.h === pan.h)?.id || 'custom';
     body = `
       <select data-on="scale-pan">
@@ -433,7 +442,8 @@ function scalePanel(r, v, sc) {
         <label>幅<input type="number" inputmode="decimal" step="0.1" value="${pan.w}" data-on="scale-dim" data-k="w"></label>×
         <label>奥<input type="number" inputmode="decimal" step="0.1" value="${pan.d}" data-on="scale-dim" data-k="d"></label>×
         <label>高<input type="number" inputmode="decimal" step="0.1" value="${pan.h}" data-on="scale-dim" data-k="h"></label></div>` : ''}
-      <div class="scale-note">容積 ${Math.round(C.panVolume(pan))}cm³ ／ 基準型の <b>${sc.factor.toFixed(2)}倍</b> → 推奨粉量 <b>約${Math.round(sc.flour)}g</b></div>`;
+      ${panBad ? '<div class="scale-note warn-t">寸法はすべて0より大きい数を入力してください（基準の型で計算しています）</div>' : ''}
+      <div class="scale-note">容積 ${Math.round(C.panVolume(sc.pan))}cm³ ／ 基準型の <b>${sc.factor.toFixed(2)}倍</b> → 推奨粉量 <b>約${Math.round(sc.flour)}g</b></div>`;
   } else {
     body = `
       <div class="stepper">
@@ -490,6 +500,9 @@ function prepHead(g) {
 }
 function prepFoot(g) {
   const y = g.batch?.yieldPerUnit;
+  if (g.batch?.yieldVerified === false) {
+    return `<div class="prep-note warn-t">材料を変更したため、仕上がり量は再確認が必要です${y ? `（元の目安：${g.prep.unit}個分で約${y}g）` : ''}。余った分は冷蔵保存</div>`;
+  }
   return `<div class="prep-note">${y ? `仕上がり目安：${g.prep.unit}個分で約${y}g ／ ` : ''}余りが出る場合があります。余った分は冷蔵保存</div>`;
 }
 
@@ -609,7 +622,8 @@ function vMake(id) {
       }
       const minOnly = typeof u === 'object' && u.show === 'min' && r.min != null;
       const g = minOnly ? `${C.fmtNum(r.min, r.precision)}g` : C.fmtAmount(r);
-      const sub = minOnly ? `まずこの量 ／ 硬ければ追加（最大${C.fmtNum(r.max, r.precision)}g）` : (r.min != null || r.max != null) ? `幅 ${C.fmtRange(r)}` : '';
+      const cooks = r.perCook && r.perCook.length > 1 ? r.perCook.map((x, i) => `${i + 1}回目 ${C.fmtNum(x, r.precision)}g`).join(' ／ ') : '';
+      const sub = cooks || (minOnly ? `まずこの量 ／ 硬ければ追加（最大${C.fmtNum(r.max, r.precision)}g）` : (r.min != null || r.max != null) ? `幅 ${C.fmtRange(r)}` : '');
       return `<div class="mk-ing"><span class="n">${esc(r.name)}${r.tentative ? ' <span class="badge b-warn">要確認</span>' : ''}</span><span class="g">${esc(g)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</div>`;
     }).join('');
     main = `
@@ -790,14 +804,24 @@ async function finishBake(b, status = 'done') {
   go(`#/record/${b.id}`);
 }
 
+/** 作り始める前の確認（v1.1.6 より前に保存したデータ・古いバックアップ由来の不正値も止める） */
+function startBlocked(v) {
+  const errs = C.validateVariant(v);
+  if (!errs.length) return false;
+  toast(`このレシピはまだ作り始められません：${errs[0]}（編集画面で直してください）`);
+  return true;
+}
 async function startBake(r, v, planId = null) {
+  if (startBlocked(v)) return;
   const sc = curScale(r, v);
   const pb = C.planBranch(v);
   const planOpt = pb ? pb.options.find((o) => o.id === planId) || pb.options[0] : null;
   const amt = C.computeAmounts(v, sc, planOpt?.id);
   const now = Date.now();
   const seq = Math.max(0, ...S.bakes.filter((b) => b.recipeId === r.id).map((b) => b.seq || 0)) + 1;
-  const first = v.steps[0];
+  // 最初の工程は、選んだ計画で展開した順番の先頭（計画の分岐そのものは工程として表示しない）
+  const first = C.flattenSteps(v.steps, planOpt ? { [pb.id]: planOpt.id } : {}).list[0]?.step;
+  if (!first) { toast('この計画には工程がありません（編集画面で工程を追加してください）'); return; }
   const b = {
     id: uid('bake'), recipeId: r.id, seq, status: 'active',
     startedAt: now, finishedAt: null, createdAt: now, updatedAt: now,
@@ -1132,7 +1156,7 @@ function vEdit(rid, vid) {
           : `<div class="ed-row"><label class="grow">量（文字）${inp(`it:${gi}:${ii}:text`, it.text)}</label></div>`}
           <div class="ed-row">${inp(`it:${gi}:${ii}:note`, it.note, 'placeholder="メモ（任意）"')}</div>
         </div>`).join('')}
-      ${g.kind === 'prep' ? C.prepYieldWarnings(v).filter((w) => w.groupId === g.id).map((w) => `<div class="card warn small">⚠️ ${esc(w.msg)}</div>`).join('') : ''}
+      ${g.kind === 'prep' && g.batch ? prepEditorBlock(r, v, g, gi) : ''}
       ${g.kind === 'flour' || g.kind === 'dough' ? `<button class="link" data-act="ed-add-item" data-g="${gi}">＋ 材料を追加</button>` : ''}
     </div>`).join('');
 
@@ -1179,6 +1203,18 @@ function vEdit(rid, vid) {
   </div>`;
 }
 
+function prepEditorBlock(r, v, g, gi) {
+  const ov = variantOf(r, S.ui.edit.vid);
+  const og = ov.ingredientGroups.find((x) => x.id === g.id);
+  const changed = C.prepChanged(og, g);
+  const warns = C.prepYieldWarnings(v).filter((w) => w.groupId === g.id && !w.unverified).map((w) => w.msg);
+  if ((changed || g.batch.yieldVerified === false) && !g._yieldConfirmed) warns.unshift(`材料を変更したため、仕上がり量の再確認が必要です（元の目安 ${g.batch.unit}個分で約${g.batch.yieldPerUnit}g）`);
+  return `
+    ${warns.map((m) => `<div class="card warn small">⚠️ ${esc(m)}</div>`).join('')}
+    ${changed || g.batch.yieldVerified === false ? `<div class="ed-row g3"><label>仕上がり目安 g（${g.batch.unit}個分）<input type="number" inputmode="decimal" step="any" data-on="ed" data-f="prep:${gi}:yield" value="${esc(g.batch.yieldPerUnit ?? '')}"></label>
+      <label class="inline"><input type="checkbox" data-on="ed" data-f="prep:${gi}:confirm" ${g._yieldConfirmed ? 'checked' : ''}>実際に作って確認した</label></div>` : ''}`;
+}
+
 function edSet(f, el) {
   const E = S.ui.edit; if (!E) return;
   const d = E.d, v = variantOf(d, E.vid);
@@ -1190,6 +1226,11 @@ function edSet(f, el) {
   else if (kind === 'var' && a === 'doughFamily') { if (val) v.dough = { ...(v.dough || {}), familyId: val }; else delete v.dough; }
   else if (kind === 'var') v[a] = a === 'baseCount' ? numv(val) : val;
   else if (kind === 'pan') v.basePan[a] = numv(val);
+  else if (kind === 'prep') {
+    const g = v.ingredientGroups[+a];
+    if (b2 === 'yield') g.batch.yieldPerUnit = numv(val);   // 数字を直しただけでは「確認済み」にしない
+    if (b2 === 'confirm') { g._yieldConfirmed = !!val; if (val) g.batch.yieldVerified = true; }
+  }
   else if (kind === 'it') {
     const it = v.ingredientGroups[+a].items[+b2];
     switch (c) {
@@ -1211,41 +1252,46 @@ function edSet(f, el) {
     switch (b2) {
       case 'title': case 'body': s[b2] = val; break;
       case 'tentative': s.tentative = val; break;
-      case 'tMin': { const m = numv(val); if (m) s.timer = { ...(s.timer || {}), min: m }; else delete s.timer; break; }
-      case 'tMax': if (s.timer) { const m = numv(val); if (m) s.timer.max = m; else delete s.timer.max; } break;
+      // 空欄だけが「なし」。0 はそのまま残し、保存前チェックで止める
+      case 'tMin': { const m = numv(val); if (m != null) s.timer = { ...(s.timer || {}), min: m }; else delete s.timer; break; }
+      case 'tMax': if (s.timer) { const m = numv(val); if (m != null) s.timer.max = m; else delete s.timer.max; } break;
       case 'fTemp': s.ferment.temp = val; break;
       case 'fCue': s.ferment.cue = val; break;
-      case 'fMin': s.ferment.min = numv(val) || undefined; break;
-      case 'fMax': s.ferment.max = numv(val) || undefined; break;
+      case 'fMin': s.ferment.min = numv(val) ?? undefined; break;
+      case 'fMax': s.ferment.max = numv(val) ?? undefined; break;
       case 'cMin': s.cold.minH = numv(val); break;
       case 'cMax': s.cold.maxH = numv(val); break;
     }
   }
 }
 
+const blank = (x) => (x === '' || x == null || !Number.isFinite(+x) ? null : +x);
 async function edSave() {
   const E = S.ui.edit;
   const orig = recipeById(E.rid);
   const d = clone(E.d);
   const v = variantOf(d, E.vid);
+  // 材料名が空欄の行は保存しない（黙って消すと基準粉量や工程の「使う材料」とずれるため）
+  { const g0 = v.ingredientGroups.find((g) => g.items.some((it) => !String(it.name ?? '').trim()));
+    if (g0) { toast(`「${g0.name || '材料'}」に材料名が空欄の行があります。不要なら削除ボタンで消してください`); return; } }
   const flourItems = v.ingredientGroups.filter((g) => g.kind === 'flour').flatMap((g) => g.items);
-  const base = flourItems.reduce((s, it) => s + (+it._g?.target || 0), 0);
+  const base = flourItems.reduce((s, it) => s + (blank(it._g?.target) || 0), 0);
   if (!(base > 0)) { toast('粉の合計が0gです'); return; }
-  if (v.scaleMode === 'count' && !(v.baseCount > 0)) { toast('基準の個数を入力してください'); return; }
-  if (v.scaleMode === 'panVolume' && !(C.panVolume(v.basePan) > 0)) { toast('型の寸法を入力してください'); return; }
+  { const e0 = C.validateScale(v); if (e0.length) { toast(e0[0]); return; } }
   v.baseFlour = Math.round(base * 100) / 100;
   for (const g of v.ingredientGroups) {
-    g.items = g.items.filter((it) => (it.name || '').trim());
     for (const it of g.items) {
       if (it.byPlan) {
-        for (const [k, g] of Object.entries(it._gp)) {
+        for (const [k, g0] of Object.entries(it._gp)) {
+          const g = blank(g0);
           if (g == null) { toast(`「${it.name}」の量を入力してください`); return; }
           it.byPlan[k] = { target: (g / base) * 100 };
         }
         it.pct = { ...Object.values(it.byPlan)[0] };
         delete it._gp; delete it._g;
       } else if (it.basis === 'flour') {
-        const gg = it._g;
+        // 空欄（''）は「なし」。数値 0 と取り違えない
+        const gg = { target: blank(it._g.target), min: blank(it._g.min), max: blank(it._g.max) };
         if (gg.target == null) { toast(`「${it.name}」のgを入力してください`); return; }
         it.pct = { target: (gg.target / base) * 100 };
         if (gg.min != null) it.pct.min = (gg.min / base) * 100;
@@ -1254,6 +1300,19 @@ async function edSave() {
       }
     }
   }
+  // 編集で意味が変わったデータを残さない：名前を変えた材料の ingKey、条件を変えた工程の mix 用メタデータ
+  const ov = variantOf(orig, E.vid);
+  const errs = C.validateVariant(v);
+  if (errs.length) { toast(errs[0]); return; }
+  const std = buildSeedRecipes().find((x) => x.id === d.id)?.variants.find((x) => x.id === v.id) || null;
+  C.reconcileIngKeys(ov, v, std);
+  C.markChangedPreps(ov, v, std);
+  let stripped = C.stripStaleMixMeta(ov, v);
+  // 標準の工程に完全に戻ったときだけ、同時製作用のデータを付け直す（判定は移行処理と同じ厳しさ）
+  const restored = std && !C.phaseComplete(v) && applyStepMeta(v, std);
+  if (restored) stripped = false;
+  const yw = C.prepYieldWarnings(v);
+  if (yw.length && !confirm(`${yw.map((w) => w.msg).join('\n')}\n\nこのまま保存しますか？`)) return;
   // keep the old version for future history UI
   await db.put('recipeVersions', { id: `${orig.id}@v${orig.version}`, recipeId: orig.id, version: orig.version, savedAt: Date.now(), data: clone(orig) });
   d.version = orig.version + 1;
@@ -1262,7 +1321,7 @@ async function edSave() {
   if (!flourItems.some((it) => it.tentative) && !JSON.stringify(v).includes('"tentative":true')) delete d.reviewNote;
   await saveRecipe(d);
   S.ui.edit = null;
-  toast(`v${d.version} として保存しました`);
+  toast(`v${d.version} として保存しました${stripped ? '（工程の条件が変わったため、同時製作の対象から外れます）' : restored ? '（標準の工程に戻ったため、同時製作の対象に戻りました）' : ''}`);
   go(`#/recipe/${d.id}`);
 }
 
@@ -1285,7 +1344,7 @@ function openSettings() {
         <label class="btn block">JSONから復元<input type="file" accept="application/json,.json" data-on="import" hidden></label>`)}
       ${section('保存領域', `<p class="small" id="storage-info">確認中…</p>`)}
       ${section('初期データ', `
-        <button class="btn block" data-act="reseed">初期レシピ3件を再登録（同じIDは初期状態に戻る）</button>
+        <button class="btn block" data-act="reseed">初期レシピ${buildSeedRecipes().length}件を再登録（同じIDは初期状態に戻る）</button>
         <button class="btn danger ghost block" data-act="wipe">全データを削除</button>`)}
       <p class="muted small center">パンノート v${APP_VERSION}</p>
     </div>
@@ -1359,6 +1418,7 @@ async function importJSON(file, mode) {
   }
   photoUrls.clear();
   await loadAll();
+  await seed();   // 古いバックアップでも、復元直後に移行処理と新レシピの追加を行う
   applyTheme();
   closeSheet();
   toast('復元しました');
@@ -1390,6 +1450,7 @@ const A = {
   async start(el) {
     unlockAudio();
     const r = recipeById(el.dataset.r); const v = variantOf(r, el.dataset.v);
+    if (startBlocked(v)) return;   // 計画を選ぶ画面を出す前に止める
     const pb = C.planBranch(v);
     if (!pb) { await startBake(r, v); return; }
     const sc = curScale(r, v);
@@ -1554,7 +1615,7 @@ const A = {
   async export() { await exportJSON($('#bk-photos')?.checked); openSettings(); },
   'imp-mode': (el) => { $$('#imp-mode button').forEach((x) => x.classList.toggle('on', x === el)); },
   async reseed() {
-    if (!confirm('初期レシピ3件を初期状態で登録し直します（編集内容は上書き、記録は残ります）。')) return;
+    if (!confirm(`初期レシピ${buildSeedRecipes().length}件を初期状態で登録し直します（編集内容は上書き、記録は残ります）。`)) return;
     for (const r of buildSeedRecipes()) {
       const old = recipeById(r.id);
       if (old) { await db.put('recipeVersions', { id: `${old.id}@v${old.version}`, recipeId: old.id, version: old.version, savedAt: Date.now(), data: clone(old) }); r.version = old.version + 1; r.favorite = old.favorite; }
@@ -1595,7 +1656,8 @@ const A = {
   },
 };
 function withRV(fn, soft = false) {
-  const r = recipeById(S.route.id); const v = variantOf(r, S.ui.variant[r.id]);
+  const r = recipeById(S.route.id); if (!r) return;   // 入力欄の確定が画面移動のあとに届いた場合
+  const v = variantOf(r, S.ui.variant[r.id]);
   fn(r, v, scaleKey(r, v));
   if (soft) softRerender(); else rerender();
 }
@@ -1628,7 +1690,7 @@ const ON = {
     const p = C.PAN_PRESETS.find((x) => x.id === el.value);
     S.ui.scale[k] = { pan: p ? { ...p } : { ...C.scaleFor(v, S.ui.scale[k]).pan, name: '入力した型', custom: true } };
   }),
-  'scale-dim': (el, ev) => { if (ev.type !== 'change') return; withRV((r, v, k) => { const pan = { ...C.scaleFor(v, S.ui.scale[k]).pan }; pan[el.dataset.k] = +el.value; pan.name = '入力した型'; pan.custom = true; S.ui.scale[k] = { pan }; }, true); },
+  'scale-dim': (el, ev) => { if (ev.type !== 'change') return; withRV((r, v, k) => { const pan = { ...(S.ui.scale[k]?.pan?.custom ? S.ui.scale[k].pan : C.scaleFor(v, S.ui.scale[k]).pan) }; pan[el.dataset.k] = +el.value; pan.name = '入力した型'; pan.custom = true; S.ui.scale[k] = { pan }; }, true); },
   rec: (el) => {
     const b = bakeById(el.dataset.b); const k = el.dataset.k;
     if (k.startsWith('env.')) b.env[k.slice(4)] = el.value; else b[k] = el.value;
@@ -1649,7 +1711,7 @@ const ON = {
   ed: (el, ev) => {
     edSet(el.dataset.f, el);
     // refresh flour total display on change only (keeps focus while typing)
-    if (ev.type === 'change' && /:gT$/.test(el.dataset.f)) softRerender();
+    if (ev.type === 'change' && /:(gT|pcT|pcMin|pcMax|bg|name|yield|confirm)$/.test(el.dataset.f)) softRerender();
   },
 };
 for (const type of ['input', 'change']) {
@@ -1677,8 +1739,9 @@ window.addEventListener('hashchange', () => render());
 
 /* ───────────────────────── boot ───────────────────────── */
 async function seed() {
+  if (!S.meta.seeded && S.recipes.length) await setMeta('seeded', 1);  // 記録のない古いデータは最古の版として移行する
   if (!S.meta.seeded) {
-    for (const r of buildSeedRecipes()) await db.put('recipes', r);
+    for (const r of buildSeedRecipes()) if (!recipeById(r.id)) await db.put('recipes', r);
     await setMeta('seeded', SEED_VERSION);
     S.recipes = await db.getAll('recipes');
   } else if (S.meta.seeded < SEED_VERSION) {
