@@ -2,7 +2,7 @@ import * as db from './db.js';
 import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited, DOUGH_FAMILIES, applyStepMeta } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '1.5.0';
+export const APP_VERSION = '2.0.2';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -65,19 +65,21 @@ const CAT_EMOJI = { 食パン: '🍞', ハード系: '🥖', 高加水: '🥖', 
 
 /* ───────────────────────── state ───────────────────────── */
 const S = {
-  recipes: [], bakes: [], meta: {},
+  recipes: [], bakes: [], batches: [], meta: {},
   route: { name: 'home' },
   ui: {
     scale: {}, variant: {}, plan: {}, showPct: false, dtab: {},
     filter: { q: '', cat: '', flags: new Set() },
     recFilter: '',
     edit: null,
+    batch: null,   // まとめて作る：設定中の内容
   },
 };
 
 async function loadAll() {
   S.recipes = await db.getAll('recipes');
   S.bakes = await db.getAll('bakes');
+  S.batches = await db.getAll('batches');
   const metas = await db.getAll('meta');
   S.meta = Object.fromEntries(metas.map((m) => [m.key, m.value]));
 }
@@ -85,13 +87,24 @@ async function setMeta(key, value) { S.meta[key] = value; await db.put('meta', {
 function upsert(arr, obj) { const i = arr.findIndex((x) => x.id === obj.id); if (i >= 0) arr[i] = obj; else arr.push(obj); }
 async function saveRecipe(r) { r.updatedAt = Date.now(); await db.put('recipes', r); upsert(S.recipes, r); }
 async function saveBake(b) { b.updatedAt = Date.now(); await db.put('bakes', b); upsert(S.bakes, b); }
+async function saveBatch(x) { x.updatedAt = Date.now(); await db.put('batches', x); upsert(S.batches, x); }
+/* 作るモードの「進行」は、単独の bake か、まとめて作る batch のどちらか */
+const isBatch = (x) => x?.kind === 'batch';
+const saveRun = (x) => (isBatch(x) ? saveBatch(x) : saveBake(x));
 
 const recipeById = (id) => S.recipes.find((r) => r.id === id);
 const bakeById = (id) => S.bakes.find((b) => b.id === id);
+const batchById = (id) => S.batches.find((b) => b.id === id);
+const runById = (id) => bakeById(id) || batchById(id);
 const variantOf = (r, vid) => r.variants.find((v) => v.id === vid) || r.variants.find((v) => v.id === r.defaultVariantId) || r.variants[0];
-const doneBakes = () => S.bakes.filter((b) => b.status !== 'active').sort((a, b) => b.startedAt - a.startedAt);
+// まとめて作っている途中の子Bake（status:'inBatch'）は、記録にも単独の製作中にも出さない
+const doneBakes = () => S.bakes.filter((b) => b.status !== 'active' && b.status !== 'inBatch').sort((a, b) => b.startedAt - a.startedAt);
 const bakesOf = (rid) => doneBakes().filter((b) => b.recipeId === rid);
 const activeBakes = () => S.bakes.filter((b) => b.status === 'active').sort((a, b) => b.startedAt - a.startedAt);
+const activeBatches = () => S.batches.filter((x) => x.status === 'active').sort((a, b) => b.startedAt - a.startedAt);
+const activeRuns = () => [...activeBakes(), ...activeBatches()].sort((a, b) => b.startedAt - a.startedAt);
+const runTitle = (x) => (isBatch(x) ? `まとめて作る：${x.snapshot.allocation.map((a) => `${a.recipeName}${a.count}`).join('・')}` : x.snapshot.recipeName);
+const leadLabel = (hb) => (!hb ? '' : hb.label || (hb.mode === 'none' ? '手ごね' : C.HB_MODE_LABEL[hb.mode] || ''));
 const lastBake = (rid) => bakesOf(rid)[0];
 const lastMemoBake = (rid) => bakesOf(rid).find((b) => (b.nextMemo || '').trim());
 const routeLabel = (b) => {
@@ -124,6 +137,7 @@ function render(keepScroll = false) {
   S.route = parseRoute();
   const r = S.route;
   if (r.name !== 'edit') S.ui.edit = null;   // 保存せずに編集画面を離れたら、下書きは捨てる
+  if (r.name !== 'batch') S.ui.batch = null;
   const key = location.hash;
   const scrollY = window.scrollY;
   let html = '';
@@ -135,6 +149,7 @@ function render(keepScroll = false) {
       case 'records': html = vRecords(); break;
       case 'record': html = vRecord(r.id); break;
       case 'edit': html = vEdit(r.id, r.q.v); break;
+      case 'batch': html = vBatchNew(r.q); break;
       default: html = vHome();
     }
   } catch (e) {
@@ -146,7 +161,7 @@ function render(keepScroll = false) {
   document.body.classList.toggle('making', inMake);
   $$('#tabs [data-tab]').forEach((t) => {
     const tab = t.dataset.tab;
-    const on = tab === r.name || (tab === 'recipes' && (r.name === 'recipe' || r.name === 'edit')) || (tab === 'records' && r.name === 'record') || (tab === 'home' && !['recipes', 'recipe', 'edit', 'make', 'records', 'record'].includes(r.name));
+    const on = tab === r.name || (tab === 'recipes' && ['recipe', 'edit', 'batch'].includes(r.name)) || (tab === 'records' && r.name === 'record') || (tab === 'home' && !['recipes', 'recipe', 'edit', 'batch', 'make', 'records', 'record'].includes(r.name));
     t.classList.toggle('on', on);
   });
   setWake(inMake);
@@ -178,7 +193,7 @@ const statusBadge = (s) => `<span class="badge b-status s-${esc(s)}">${esc(s)}</
 
 /* ───────────────────────── HOME ───────────────────────── */
 function vHome() {
-  const act = activeBakes();
+  const act = activeRuns();
   const withLast = S.recipes.map((r) => ({ r, last: lastBake(r.id), memo: lastMemoBake(r.id) })).filter((x) => x.last).sort((a, b) => b.last.startedAt - a.last.startedAt);
   const favs = S.recipes.filter((r) => r.favorite || r.status === '定番');
   const recent = doneBakes().slice(0, 4);
@@ -224,7 +239,7 @@ function activeCard(b) {
   const timers = b.timers.filter((t) => !t.dismissed);
   return `
   <article class="card active-card tap" data-act="nav" data-href="#/make/${b.id}">
-    <div class="ac-top"><span class="pulse"></span><span class="ac-name">${esc(b.snapshot.recipeName)}</span><span class="muted small">#${b.seq}</span></div>
+    <div class="ac-top"><span class="pulse"></span><span class="ac-name">${esc(runTitle(b))}</span><span class="muted small">${isBatch(b) ? '' : `#${b.seq}`}</span></div>
     <div class="ac-step">STEP ${idx + 1}：${esc(cur?.title || '')}</div>
     ${timers.map((t) => `<div class="ac-timer">${ICON.timer}<span>${esc(t.label)}</span>${cdSpan(t, 'ac-cd')}</div>`).join('')}
     <div class="ac-go">続きから ›</div>
@@ -237,7 +252,8 @@ function bakeRow(b) {
   <button class="bake-row" data-act="nav" data-href="#/record/${b.id}">
     <div class="thumb sm">${photo ? `<img data-photo="${photo}" alt="">` : `<span>${CAT_EMOJI[b.snapshot.category] || '🍞'}</span>`}</div>
     <div class="br-body">
-      <div class="br-t">${esc(b.snapshot.recipeName)} <span class="muted">#${b.seq}</span></div>
+      <div class="br-t">${esc(b.snapshot.recipeName)} <span class="muted">#${b.seq}</span>${b.batchId ? ' <span class="badge b-batch">まとめて作った</span>' : ''}</div>
+      ${b.batchId && b.snapshot.mix?.allocation ? `<div class="br-s">${esc(b.snapshot.mix.allocation.map((a) => `${a.short || a.name}${a.count}`).join('・'))}</div>` : ''}
       <div class="br-s">${fmtDateY(b.startedAt)}${b.snapshot.variant && b.snapshot.variantName && b.snapshot.variantName !== '基本' ? ` · ${esc(b.snapshot.variantName)}` : ''}${routeLabel(b) ? ` · ${esc(routeLabel(b))}` : ''}${b.status === 'aborted' ? ' · <span class="warn-t">途中終了</span>' : ''}</div>
       ${b.nextMemo ? `<div class="br-memo">次回：${esc(b.nextMemo.split('\n')[0])}</div>` : ''}
     </div>
@@ -323,7 +339,7 @@ function vRecipe(id) {
   const tab = S.ui.dtab[r.id] || 'ing';
   const memo = lastMemoBake(r.id);
   const last = lastBake(r.id);
-  const act = activeBakes().filter((b) => b.recipeId === r.id);
+  const act = [...activeBakes().filter((b) => b.recipeId === r.id), ...activeBatches().filter((x) => x.snapshot.allocation.some((a) => a.recipeId === r.id))];
   const nBakes = bakesOf(r.id).length;
   const hasColdV = C.hasCold(v.steps);
   const ferm = [];
@@ -377,7 +393,7 @@ function vRecipe(id) {
     </div>
   </div>
   <div class="startbar">
-    ${act.length ? `<button class="btn ghost" data-act="nav" data-href="#/make/${act[0].id}">進行中 #${act[0].seq}</button>` : ''}
+    ${act.length ? `<button class="btn ghost" data-act="nav" data-href="#/make/${act[0].id}">${isBatch(act[0]) ? 'まとめて作る 進行中' : `進行中 #${act[0].seq}`}</button>` : ''}
     <button class="btn primary big" data-act="start" data-r="${r.id}" data-v="${v.id}">${ICON.fire}このレシピで作る</button>
   </div>`;
 }
@@ -410,7 +426,7 @@ function doughCard(r, v) {
   <div class="card dough-card">
     <div class="dc-h"><span class="dc-k">生地</span><b>${esc(familyName(v) || '系統なし')}</b></div>
     ${v.mix === false ? `<div class="muted small">${v.hb?.mode === 'full_auto' ? 'HB全自動のため、同時製作の対象外です' : '同時製作の対象外に設定されています'}</div>` : ''}
-    ${n ? sec('same', rel.same) + sec('split', rel.split) + sec('nojudge', rel.nojudge) : '<div class="muted small">同じ配合のほかのパンはまだありません</div>'}
+    ${n ? sec('same', rel.same) + (rel.same.length && v.mix !== false ? `<button class="btn block batch-btn" data-act="batch-new" data-r="${r.id}" data-v="${v.id}">🧺 このパンとまとめて作る</button>` : '') + sec('split', rel.split) + sec('nojudge', rel.nojudge) : '<div class="muted small">同じ配合のほかのパンはまだありません</div>'}
     ${fam}
     ${n ? '<div class="dc-foot">工程の条件だけの判定です。数量・HB容量・天板容量はこの判定に含みません</div>' : ''}
   </div>`;
@@ -569,9 +585,145 @@ function logBlock(r) {
   return `<div class="card list">${list.map(bakeRow).join('')}</div>`;
 }
 
+/* ───────────────────────── まとめて作る（Batch）：設定 ───────────────────────── */
+// 始めた variant と「同じ生地で同時に作れる」variant が候補。1レシピにつき1つを選ぶ
+function batchCandidates(U) {
+  const r0 = recipeById(U.rid); const v0 = r0 && variantOf(r0, U.vid);
+  if (!v0) return [];
+  const plan0 = C.planBranch(v0) ? U.plan : null;
+  const out = [];
+  for (const r of [r0, ...S.recipes.filter((x) => x.id !== r0.id)]) {
+    const vs = r.variants.filter((x) => x === v0 || (x.mix !== false && C.compatForPlan(v0, x, plan0, C.planBranch(x) ? U.plan : null).level === 'same'));
+    if (vs.length) out.push({ r, vs });
+  }
+  return out;
+}
+function batchMembers(U) {
+  const cands = batchCandidates(U);
+  const members = [];
+  for (const { r, vs } of cands) {
+    const sel = U.sel[r.id];
+    if (!sel?.on) continue;
+    const v = vs.find((x) => x.id === sel.vid) || vs[0];
+    members.push({ recipe: { id: r.id, name: r.name, category: r.category, version: r.version }, v, count: sel.count });
+  }
+  const leadIndex = Math.max(0, members.findIndex((m) => m.recipe.id === U.lead));
+  return { cands, members, leadIndex };
+}
+function vBatchNew() {
+  const U = S.ui.batch;
+  if (!U) { setTimeout(() => go('#/recipes')); return ''; }
+  const { cands, members, leadIndex } = batchMembers(U);
+  const p = members.length ? C.planBatch(members, { leadIndex, planId: U.plan }) : { ok: false, errors: ['まとめて作るパンを2つ以上選んでください'] };
+  const rows = cands.map(({ r, vs }) => {
+    const sel = U.sel[r.id] || {};
+    const vcur = vs.find((x) => x.id === sel.vid) || vs[0];
+    return `
+    <div class="bt-row ${sel.on ? 'on' : ''}">
+      <button class="bt-on" data-act="batch-toggle" data-r="${r.id}"><span class="bt-box">${sel.on ? '✓' : ''}</span>${CAT_EMOJI[r.category] || '🍞'} ${esc(r.name)}</button>
+      ${sel.on ? `
+        ${vs.length > 1 ? `<div class="seg sm">${vs.map((x) => `<button class="${x.id === vcur.id ? 'on' : ''}" data-act="batch-variant" data-r="${r.id}" data-v="${x.id}">${esc(x.name)}</button>`).join('')}</div>` : ''}
+        <div class="stepper sm"><button data-act="batch-count" data-r="${r.id}" data-d="-1" aria-label="減らす">−</button><div class="stepper-v"><b>${sel.count}</b><span>${esc(vcur.countUnit || '個')}</span></div><button data-act="batch-count" data-r="${r.id}" data-d="1" aria-label="増やす">＋</button></div>` : ''}
+    </div>`;
+  }).join('');
+  const leadSeg = members.length ? `<div class="seg bt-lead">${members.map((m) => `<button class="${m.recipe.id === members[leadIndex].recipe.id ? 'on' : ''}" data-act="batch-lead" data-r="${m.recipe.id}">${esc(m.recipe.name)}<small>${esc(leadLabel(m.v.hb) || m.v.name)}</small></button>`).join('')}</div>` : '';
+  let sum = '';
+  if (p.ok || p.totalFlour) {
+    const preps = (p.memberAmounts || []).flatMap((a, i) => a.groups.filter((g) => g.prep).map((g) => `${esc(members[i].recipe.name)}：${esc(g.name)}${esc(C.batchLabel(g))}`));
+    const cap = members[leadIndex]?.v.hb?.capacity;
+    sum = `
+    <div class="card bt-sum">
+      <div class="summary">
+        <div class="sm-i"><div class="k">合計</div><div class="v">${p.total}個</div></div>
+        <div class="sm-i"><div class="k">粉</div><div class="v">${Math.round(p.totalFlour)}g</div></div>
+        <div class="sm-i"><div class="k">生地</div><div class="v">${Math.round(p.totalDough)}g</div></div>
+        <div class="sm-i"><div class="k">1個</div><div class="v">約${Math.round(p.pieceWeight)}g</div></div>
+      </div>
+      ${cap && members[leadIndex].v.hb.mode !== 'none' ? `<div class="small">HB「${esc(cap.course || '')}」コース：粉${cap.flourMax}gまで</div>` : ''}
+      ${preps.length ? `<div class="small">下準備：${preps.join('／')}</div>` : ''}
+      ${(p.commonProof || []).map((cp) => `<div class="small">二次発酵（共通）：${esc(cp.temp)}${cp.min != null ? ` ${rangeMin(cp.min, cp.max)}` : ''}${cp.cue ? `　目安：${esc(cp.cue)}` : ''}</div>`).join('')}
+      ${p.bakeOut ? `<div class="small">焼き時間：${p.bakeOut.map((o) => `${esc(o.name)} ${o.range ? rangeMin(o.range[0], o.range[1]) : '?'}`).join('／')}（同時に入れて取り出しをずらす）</div>` : ''}
+    </div>`;
+  }
+  return `
+  ${subhead('まとめて作る', '同じ生地で、いっしょに作るパンを選びます', '', `#/recipe/${U.rid}`)}
+  <div class="pad batch-new">
+    <div class="sec-h"><h2>作るパン</h2><span class="muted small">1レシピにつき1つ</span></div>
+    <div class="card bt-list">${rows}</div>
+    ${members.length ? `<div class="sec-h"><h2>生地の作り方</h2><span class="muted small">共通の生地はこのレシピの工程で作ります</span></div>${leadSeg}` : ''}
+    ${sum}
+    ${p.ok ? '' : `<div class="card warn">${p.errors.map((e) => `⚠️ ${esc(e)}`).join('<br>')}</div>`}
+    <div class="muted small">「同じ生地で同時に作れる」組み合わせだけ選べます。天板・オーブンに一度に入るかは判定していません。</div>
+  </div>
+  <div class="startbar">
+    <button class="btn primary big" data-act="batch-start" ${p.ok ? '' : 'disabled'}>${ICON.fire}まとめて作り始める</button>
+  </div>`;
+}
+async function startBatch() {
+  const U = S.ui.batch;
+  const { members, leadIndex } = batchMembers(U);
+  const p = C.planBatch(members, { leadIndex, planId: U.plan });
+  if (!p.ok) { toast(p.errors[0]); return; }
+  const now = Date.now();
+  const id = uid('batch');
+  const lead = members[leadIndex];
+  const allocSummary = p.allocation.map((a) => ({ name: a.recipeName, count: a.count }));
+  const children = members.map((m, i) => {
+    const pb = C.planBranch(m.v);
+    const po = pb ? pb.options.find((o) => o.id === U.plan) : null;
+    const bid = uid('bake');
+    p.allocation[i].bakeId = bid;
+    return {
+      id: bid, recipeId: m.recipe.id, batchId: id, status: 'inBatch',
+      seq: Math.max(0, ...S.bakes.filter((b) => b.recipeId === m.recipe.id).map((b) => b.seq || 0)) + 1,
+      startedAt: now, finishedAt: null, createdAt: now, updatedAt: now,
+      snapshot: {
+        takenAt: now,
+        recipeId: m.recipe.id, recipeName: m.recipe.name, category: m.recipe.category, recipeVersion: m.recipe.version,
+        variantId: m.v.id, variantName: m.v.name,
+        variant: clone(m.v),
+        scale: clone(p.memberScales[i]),
+        amounts: clone(p.memberAmounts[i]),
+        plan: po ? { branchId: pb.id, id: po.id, label: po.label, icon: po.icon || '' } : null,
+        // 実際にどの作り方で生地を作ったか（子Bake だけを見ても分かるように）
+        mix: { source: 'batch', batchId: id, leadRecipeId: lead.recipe.id, leadVariantId: lead.v.id, leadRecipeName: lead.recipe.name, leadVariantName: lead.v.name, label: leadLabel(lead.v.hb), allocation: allocSummary },
+      },
+      progress: { currentStepId: null, choices: po ? { [pb.id]: po.id } : {}, log: {} },
+      timers: [],
+      env: { room: '', water: '', dough: '' },   // 共通生地の値は batch.env にだけ入れる
+      rating: null, scores: {}, notes: '', bakeMemo: '', nextMemo: '', photoIds: [],
+    };
+  });
+  const first = p.steps[0];
+  const batch = {
+    id, kind: 'batch', seq: Math.max(0, ...S.batches.map((x) => x.seq || 0)) + 1, status: 'active',
+    familyId: p.familyId, signature: p.signature, planId: U.plan || null,
+    startedAt: now, finishedAt: null, createdAt: now, updatedAt: now,
+    snapshot: {
+      takenAt: now,
+      recipeName: 'まとめて作る',
+      lead: { ...p.lead, recipeVersion: lead.recipe.version },
+      doughAmounts: p.leadAmounts, totalFlour: p.totalFlour, totalDough: p.totalDough, pieceWeight: p.pieceWeight, total: p.total,
+      allocation: p.allocation, commonProof: p.commonProof, bakeOut: p.bakeOut,
+      variant: { name: 'まとめて作る', countUnit: '個', steps: p.steps },
+      amounts: p.amounts,
+    },
+    progress: { currentStepId: first.id, choices: {}, log: { [first.id]: { startedAt: now } } },
+    timers: [],
+    env: { room: '', water: '', dough: '' },
+    notes: '', doughNextMemo: '',
+    childBakeIds: children.map((c) => c.id),
+  };
+  // Batch と全部の子Bake は1つのトランザクションで作る（途中まで作られた状態を残さない）
+  await db.putMany([['batches', batch], ...children.map((c) => ['bakes', c])]);
+  S.batches.push(batch); children.forEach((c) => S.bakes.push(c));
+  S.ui.batch = null;
+  go(`#/make/${id}`);
+}
+
 /* ───────────────────────── MAKE ───────────────────────── */
 function vMakeList() {
-  const act = activeBakes();
+  const act = activeRuns();
   return `
   <header class="pagehead"><h1>作る</h1></header>
   <div class="pad">
@@ -590,9 +742,10 @@ function makeCtx(b) {
 }
 
 function vMake(id) {
-  const b = bakeById(id);
+  const b = runById(id);
   if (!b) return `<div class="pad"><p>製作データが見つかりません</p><button class="btn" data-act="nav" data-href="#/home">ホームへ</button></div>`;
-  if (b.status !== 'active') { setTimeout(() => go(`#/record/${b.id}`)); return ''; }
+  if (b.status === 'inBatch' && b.batchId) { setTimeout(() => go(`#/make/${b.batchId}`)); return ''; }
+  if (b.status !== 'active') { const to = isBatch(b) ? b.childBakeIds.find((x) => bakeById(x)) : b.id; setTimeout(() => go(to ? `#/record/${to}` : '#/records')); return ''; }
   const { v, fl, idx, cur, amt } = makeCtx(b);
   const s = cur.step;
   const log = b.progress.log[s.id] || {};
@@ -626,15 +779,18 @@ function vMake(id) {
       const sub = cooks || (minOnly ? `まずこの量 ／ 硬ければ追加（最大${C.fmtNum(r.max, r.precision)}g）` : (r.min != null || r.max != null) ? `幅 ${C.fmtRange(r)}` : '');
       return `<div class="mk-ing"><span class="n">${esc(r.name)}${r.tentative ? ' <span class="badge b-warn">要確認</span>' : ''}</span><span class="g">${esc(g)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</div>`;
     }).join('');
+    const who = !isBatch(b) ? '' : s.member ? `<div class="mk-member">${CAT_EMOJI[b.snapshot.allocation[s.member.index]?.category] || '🍞'} ${esc(s.member.name)} <b>${s.member.count}個</b></div>` : '<div class="mk-member shared">共通（全部まとめて）</div>';
     main = `
       ${cur.opt ? `<div class="mk-route">ルート：${esc(cur.opt)}</div>` : ''}
+      ${who}
       <div class="mk-title">${esc(s.title)}${s.tentative ? ' <span class="badge b-warn">要確認</span>' : ''}</div>
+      ${s.allocation ? `<div class="mk-alloc">${s.allocation.map((a) => `<span>${esc(a.name)} <b>${a.count}個</b></span>`).join('')}</div>` : ''}
       ${uses ? `<div class="mk-ings">${uses}</div>` : ''}
       <div class="mk-body">${esc(C.tpl(s.body, amt))}</div>
       ${s.hb ? `<div class="mk-hb">HB｜${esc(s.hb)}</div>` : ''}
       ${s.ferment ? fermentPanel(b, s, log) : ''}
       ${s.cold ? coldPanel(b, s, log) : ''}
-      ${s.timer ? timerPanel(b, s) : customTimerPanel(b, s)}
+      ${s.bakeOut ? bakeOutPanel(b, s) : s.timer ? timerPanel(b, s) : customTimerPanel(b, s)}
       ${s.tips?.length ? `<div class="mk-tips">${s.tips.map((t) => `💡 ${esc(t)}`).join('<br>')}</div>` : ''}`;
   }
 
@@ -642,8 +798,9 @@ function vMake(id) {
   <div class="mk">
     <header class="mk-head">
       <button class="icon-btn" data-act="nav" data-href="#/home" aria-label="閉じる">${ICON.close}</button>
-      <div class="mk-head-t"><div class="t">${esc(b.snapshot.recipeName)} <span class="muted">#${b.seq}</span></div>
-        <div class="s">${b.snapshot.variantName !== '基本' ? esc(b.snapshot.variantName) + ' · ' : ''}粉${Math.round(b.snapshot.scale.flour)}g${b.snapshot.scale.mode === 'count' ? ` · ${C.fmtCount(b.snapshot.scale.count)}${esc(v.countUnit || '個')}` : v.baseCount ? ` · ${C.pieces(b.snapshot.amounts.count)}${esc(v.countUnit || '個')}` : ''} · v${b.snapshot.recipeVersion}</div></div>
+      <div class="mk-head-t">${isBatch(b) ? `<div class="t">まとめて作る</div>
+        <div class="s">${esc(b.snapshot.allocation.map((a) => `${a.recipeName} ${a.count}個`).join('・'))} · 粉${Math.round(b.snapshot.totalFlour)}g · 生地：${esc(b.snapshot.lead.recipeName)}（${esc(leadLabel(b.snapshot.lead.hb) || b.snapshot.lead.variantName)}）</div></div>` : `<div class="t">${esc(b.snapshot.recipeName)} <span class="muted">#${b.seq}</span></div>
+        <div class="s">${b.snapshot.variantName !== '基本' ? esc(b.snapshot.variantName) + ' · ' : ''}粉${Math.round(b.snapshot.scale.flour)}g${b.snapshot.scale.mode === 'count' ? ` · ${C.fmtCount(b.snapshot.scale.count)}${esc(v.countUnit || '個')}` : v.baseCount ? ` · ${C.pieces(b.snapshot.amounts.count)}${esc(v.countUnit || '個')}` : ''} · v${b.snapshot.recipeVersion}</div></div>`}
       <button class="icon-btn" data-act="make-menu" data-b="${b.id}" aria-label="メニュー">${ICON.more}</button>
     </header>
     <div class="mk-prog"><div style="width:${pct}%"></div></div>
@@ -691,6 +848,17 @@ function timerPanel(b, s) {
   <div class="panel">
     <button class="btn primary huge" data-act="t-start" data-b="${b.id}" data-s="${s.id}" data-m="${opts[0]}">${ICON.timer}${fmtClock(opts[0] * 60)} タイマー開始</button>
     ${opts.length > 1 ? `<div class="alt-mins">${opts.slice(1).map((m) => `<button class="chip" data-act="t-start" data-b="${b.id}" data-s="${s.id}" data-m="${m}">${m}分で開始</button>`).join('')}</div>` : ''}
+  </div>`;
+}
+/* まとめて作る：同じ投入時刻から、パンごとに取り出しを確認するタイマー */
+function bakeOutPanel(b, s) {
+  const ts = timersForStep(b, s);
+  if (ts.length) return `<div class="panel">${ts.map((t) => timerControls(b, t)).join('')}</div>`;
+  return `
+  <div class="panel">
+    <div class="pf-h">焼き時間はパンごとに違います。同時に入れて、時間になったものから取り出します。</div>
+    <div class="bo-list">${s.bakeOut.map((o) => `<div class="bo-row"><span>${esc(o.name)} ${o.count}個</span><b>${o.min != null ? rangeMin(o.min, o.max) : '見た目で判断'}</b></div>`).join('')}</div>
+    <button class="btn primary huge" data-act="bake-out-start" data-b="${b.id}" data-s="${s.id}">${ICON.timer} オーブンに入れた（まとめてタイマー開始）</button>
   </div>`;
 }
 function customTimerPanel(b, s) {
@@ -763,7 +931,9 @@ function stepNextLabel(b, stepId) {
 function addTimer(b, s, minutes, { maxMinutes = null, label = null, kind = 'step' } = {}) {
   const now = Date.now();
   const t = {
-    id: uid('t'), stepId: s.id, kind, label: label || s.timer?.label || s.title,
+    id: uid('t'), stepId: s.id, kind, label: (isBatch(b) && s.member && kind !== 'bakeOut' ? `${s.member.name}：` : '') + (label || s.timer?.label || s.title),
+    // まとめて作るとき：タイマーの持ち主（共通工程＝batch、パン別の工程＝その子Bake）
+    ...(isBatch(b) ? (s.member ? { scope: 'child', bakeId: b.snapshot.allocation[s.member.index]?.bakeId } : { scope: 'batch' }) : {}),
     ...(s.parallel ? { parallel: true } : {}),
     durationSec: Math.round(minutes * 60), startedAt: now, endAt: now + minutes * 60000,
     maxEndAt: maxMinutes ? now + maxMinutes * 60000 : null,
@@ -789,9 +959,10 @@ async function stepNext(b) {
   b.timers = b.timers.filter((t) => !t.dismissed);
   const n = fl.list[idx + 1];
   if (n) gotoStep(b, n.step.id);
-  await saveBake(b);
+  await saveRun(b);
 }
 async function finishBake(b, status = 'done') {
+  if (isBatch(b)) return finishBatch(b, status);
   const { cur } = makeCtx(b);
   const now = Date.now();
   const L = (b.progress.log[cur.step.id] ||= {});
@@ -802,6 +973,22 @@ async function finishBake(b, status = 'done') {
   await saveBake(b);
   stopAlarm();
   go(`#/record/${b.id}`);
+}
+
+/** まとめて作る：完了・途中終了は Batch と全部の子Bake を同じ状態に（部分完了はしない）。1つのトランザクションで保存 */
+async function finishBatch(x, status = 'done') {
+  const { cur } = makeCtx(x);
+  const now = Date.now();
+  const L = (x.progress.log[cur.step.id] ||= {});
+  L.doneAt ||= now;
+  x.timers = [];
+  x.status = status; x.finishedAt = now; x.updatedAt = now;
+  const kids = x.childBakeIds.map(bakeById).filter(Boolean);
+  for (const k of kids) { k.status = status; k.finishedAt = now; k.updatedAt = now; }
+  await db.putMany([['batches', x], ...kids.map((k) => ['bakes', k])]);
+  upsert(S.batches, x); kids.forEach((k) => upsert(S.bakes, k));
+  stopAlarm();
+  go(kids[0] ? `#/record/${kids[0].id}` : '#/records');
 }
 
 /** 作り始める前の確認（v1.1.6 より前に保存したデータ・古いバックアップ由来の不正値も止める） */
@@ -879,7 +1066,7 @@ function pushAlarm(a) {
 function showAlarm() {
   const a = alarmQueue[0];
   if (!a) { $('#modal-root').innerHTML = ''; stopAlarm(); return; }
-  const b = bakeById(a.bakeId);
+  const b = runById(a.bakeId);
   const t = a.timer;
   const late = Date.now() - a.at;
   const onStep = b && b.status === 'active' && b.progress.currentStepId === t.stepId;
@@ -890,13 +1077,14 @@ function showAlarm() {
     <div class="alarm-t">${esc(t.label)}</div>
     <div class="alarm-m">${esc(msg)}</div>
     ${t.kind === 'ferment' ? '<div class="alarm-s">見た目を確認して判定してください</div>' : ''}
+    ${t.kind === 'bakeOut' ? '<div class="alarm-s">焼き色を見て、焼けていれば取り出してください</div>' : ''}
     <div class="alarm-next">次：${esc(stepNextLabel(b, t.stepId))}</div>
     ${late > 90000 ? `<div class="alarm-s">${fmtTime(a.at)} に終了（${fmtDur(late)}前）</div>` : ''}
     <div class="alarm-btns">
       ${onStep && t.kind === 'step' ? `<button class="btn primary big" data-act="alarm-next">次の工程へ</button>` : ''}
       <button class="btn big ${onStep && t.kind === 'step' ? '' : 'primary'}" data-act="alarm-ok">OK</button>
     </div>
-    <div class="muted small">${esc(b?.snapshot.recipeName || '')}</div>
+    <div class="muted small">${esc(b ? runTitle(b) : '')}</div>
   </div></div>`;
   unlockAudio(); beep();
   if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
@@ -908,7 +1096,7 @@ async function ackAlarm(goNext) {
   const a = alarmQueue.shift();
   stopAlarm();
   if (a && goNext) {
-    const b = bakeById(a.bakeId);
+    const b = runById(a.bakeId);
     if (b && b.progress.currentStepId === a.timer.stepId) {
       await stepNext(b);
       if (S.route.name !== 'make' || S.route.id !== b.id) go(`#/make/${b.id}`); else rerender();
@@ -930,7 +1118,7 @@ function tick() {
   });
   // fire timers
   let changed = false;
-  for (const b of activeBakes()) {
+  for (const b of activeRuns()) {
     let bc = false;
     for (const t of b.timers) {
       if (t.dismissed || t.pausedRem != null) continue;
@@ -942,7 +1130,7 @@ function tick() {
         pushAlarm({ bakeId: b.id, timer: t, kind: 'max', at: t.maxEndAt });
       }
     }
-    if (bc) saveBake(b);
+    if (bc) saveRun(b);
   }
   if (changed) rerender();
 }
@@ -952,9 +1140,9 @@ function renderTimerBar() {
   const inMake = S.route.name === 'make' && S.route.id;
   const items = [];
   if (!inMake) {
-    for (const b of activeBakes()) for (const t of b.timers.filter((x) => !x.dismissed)) items.push({ b, t });
+    for (const b of activeRuns()) for (const t of b.timers.filter((x) => !x.dismissed)) items.push({ b, t });
   }
-  bar.innerHTML = items.slice(0, 3).map(({ b, t }) => `<button class="tb ${t.firedAt ? 'fired' : ''}" data-act="nav" data-href="#/make/${b.id}">${ICON.timer}<span class="tb-l">${esc(t.label)}</span><span class="muted small">${esc(b.snapshot.recipeName)}</span>${cdSpan(t)}</button>`).join('');
+  bar.innerHTML = items.slice(0, 3).map(({ b, t }) => `<button class="tb ${t.firedAt ? 'fired' : ''}" data-act="nav" data-href="#/make/${b.id}">${ICON.timer}<span class="tb-l">${esc(t.label)}</span><span class="muted small">${esc(isBatch(b) ? 'まとめて作る' : b.snapshot.recipeName)}</span>${cdSpan(t)}</button>`).join('');
   bar.classList.toggle('show', items.length > 0);
   document.body.classList.toggle('has-timerbar', items.length > 0);
 }
@@ -988,7 +1176,7 @@ function vRecords() {
   return `
   <header class="pagehead"><h1>記録</h1><span class="muted small">${doneBakes().length}回</span></header>
   <div class="pad">
-    ${activeBakes().length ? `<div class="card info tap" data-act="nav" data-href="#/make">製作中 ${activeBakes().length}件 ›</div>` : ''}
+    ${activeRuns().length ? `<div class="card info tap" data-act="nav" data-href="#/make">製作中 ${activeRuns().length}件 ›</div>` : ''}
     ${rids.length > 1 ? `<div class="chips"><button class="chip ${!f ? 'on' : ''}" data-act="rec-filter" data-v="">すべて</button>${rids.map((id) => `<button class="chip ${f === id ? 'on' : ''}" data-act="rec-filter" data-v="${id}">${esc(recipeById(id)?.name || doneBakes().find((b) => b.recipeId === id).snapshot.recipeName)}</button>`).join('')}</div>` : ''}
     ${list.length ? `<div class="card list">${list.map(bakeRow).join('')}</div>` : '<p class="muted center">まだ記録がありません</p>'}
   </div>`;
@@ -1014,8 +1202,11 @@ function vRecord(id) {
   const snap = b.snapshot;
   const v = snap.variant;
   const amt = snap.amounts;
-  const logRows = stepLogRows(b);
+  const bx = b.batchId ? batchById(b.batchId) : null;   // まとめて作った：共通の記録は batch にだけある
+  const logRows = stepLogRows(bx || b);
   const r = recipeById(b.recipeId);
+  const envOwner = bx || b;
+  const envAttr = bx ? `data-batch="${bx.id}"` : `data-b="${b.id}"`;
   const route = routeLabel(b);
   const photos = b.photoIds || [];
 
@@ -1029,7 +1220,9 @@ function vRecord(id) {
   ${subhead(`${esc(snap.recipeName)} <span class="muted">#${b.seq}</span>`, `${fmtDateY(b.startedAt)} ${fmtTime(b.startedAt)}開始${b.finishedAt ? ` · 所要 ${fmtDur(b.finishedAt - b.startedAt)}` : ''}`, '', '#/records')}
   <div class="pad record">
     ${b.status === 'active' ? `<div class="card info tap" data-act="nav" data-href="#/make/${b.id}">製作中です。作るモードに戻る ›</div>` : ''}
-    <div class="rec-tags"><span class="badge">v${snap.recipeVersion}</span>${snap.variantName !== '基本' ? `<span class="badge">${esc(snap.variantName)}</span>` : ''}${route ? `<span class="badge b-cold">${esc(route)}</span>` : ''}<span class="badge">粉${Math.round(snap.scale.flour)}g${snap.scale.mode === 'count' ? ` · ${C.fmtCount(snap.scale.count)}${esc(v.countUnit || '個')}` : ''}</span>${b.status === 'aborted' ? '<span class="badge b-warn">途中終了</span>' : ''}</div>
+    ${b.status === 'inBatch' ? `<div class="card info tap" data-act="nav" data-href="#/make/${b.batchId}">まとめて作っている途中です。作るモードに戻る ›</div>` : ''}
+    ${b.batchId ? batchCard(b, bx) : ''}
+    <div class="rec-tags"><span class="badge">v${snap.recipeVersion}</span>${snap.mix ? `<span class="badge b-batch">生地：${esc(snap.mix.label || snap.mix.leadVariantName || '')}</span>` : snap.variantName !== '基本' ? `<span class="badge">${esc(snap.variantName)}</span>` : ''}${route ? `<span class="badge b-cold">${esc(route)}</span>` : ''}<span class="badge">粉${Math.round(snap.scale.flour)}g${snap.scale.mode === 'count' ? ` · ${C.fmtCount(snap.scale.count)}${esc(v.countUnit || '個')}` : ''}</span>${b.status === 'aborted' ? '<span class="badge b-warn">途中終了</span>' : ''}</div>
 
     ${planCard(b)}
     ${section('総合評価', `<div class="stars">${starBtns}<span class="st-v">${b.rating != null ? b.rating : '-'}</span></div><div class="muted small">同じ星をもう一度タップで ½ 減</div>`)}
@@ -1042,15 +1235,15 @@ function vRecord(id) {
         <label class="ph add">${ICON.camera}<span>${photos.length === 0 ? '外観' : photos.length === 1 ? '断面' : '追加'}</span><input type="file" accept="image/*" data-on="photo-add" data-b="${b.id}" hidden></label>
       </div>`)}
 
-    ${section('環境', `
+    ${section(bx ? '共通生地の記録' : '環境', `
       <div class="env">
-        <label>室温<span><input type="number" inputmode="decimal" value="${esc(b.env.room)}" data-on="rec" data-b="${b.id}" data-k="env.room">℃</span></label>
-        <label>水温<span><input type="number" inputmode="decimal" value="${esc(b.env.water)}" data-on="rec" data-b="${b.id}" data-k="env.water">℃</span></label>
-        <label>生地温<span><input type="number" inputmode="decimal" value="${esc(b.env.dough ?? '')}" data-on="rec" data-b="${b.id}" data-k="env.dough">℃</span></label>
+        <label>室温<span><input type="number" inputmode="decimal" value="${esc(envOwner.env?.room ?? '')}" data-on="rec" ${envAttr} data-k="env.room">℃</span></label>
+        <label>水温<span><input type="number" inputmode="decimal" value="${esc(envOwner.env?.water ?? '')}" data-on="rec" ${envAttr} data-k="env.water">℃</span></label>
+        <label>生地温<span><input type="number" inputmode="decimal" value="${esc(envOwner.env?.dough ?? '')}" data-on="rec" ${envAttr} data-k="env.dough">℃</span></label>
       </div>
-      <div class="muted small">生地温：こね上がり（ロデヴは混ぜ終わり）の温度</div>`)}
+      <div class="muted small">${bx ? 'まとめて作ったパンで共通の値です（どのパンの記録から直しても同じ値）。' : ''}生地温：こね上がり（ロデヴは混ぜ終わり）の温度</div>`)}
 
-    ${logRows.length ? section('工程ログ', `<div class="card list">${logRows.map((x) => `<div class="log-row"><span>${esc(x.title)}</span><span class="lr-v">${x.dur != null ? fmtDur(x.dur) : x.start ? '計測中' : '-'}${x.j ? `<small>${esc(x.j)}</small>` : ''}</span></div>`).join('')}</div>`) : ''}
+    ${logRows.length ? section(bx ? '共通の工程ログ' : '工程ログ', `<div class="card list">${logRows.map((x) => `<div class="log-row"><span>${esc(x.title)}</span><span class="lr-v">${x.dur != null ? fmtDur(x.dur) : x.start ? '計測中' : '-'}${x.j ? `<small>${esc(x.j)}</small>` : ''}</span></div>`).join('')}</div>`) : ''}
 
     ${section('焼成メモ', `<textarea rows="2" placeholder="${esc(v.bakeSummary || '例：250℃ 10分 → 230℃ 17分')}" data-on="rec" data-b="${b.id}" data-k="bakeMemo">${esc(b.bakeMemo)}</textarea>`)}
     ${section('感想', `<textarea rows="3" placeholder="外観・クラム・食感など" data-on="rec" data-b="${b.id}" data-k="notes">${esc(b.notes)}</textarea>`)}
@@ -1064,9 +1257,26 @@ function vRecord(id) {
 
     <div class="rec-foot">
       ${r ? `<button class="btn" data-act="nav" data-href="#/recipe/${r.id}">レシピを開く</button>` : ''}
-      <button class="btn danger ghost" data-act="bake-del" data-b="${b.id}">この記録を削除</button>
+      ${b.status === 'inBatch' ? '' : `<button class="btn danger ghost" data-act="bake-del" data-b="${b.id}">この記録を削除</button>`}
     </div>
   </div>`;
+}
+
+/* まとめて作った記録：一緒に作ったパンと、生地の作り方 */
+function batchCard(b, bx) {
+  const mix = b.snapshot.mix || {};
+  const alloc = bx?.snapshot.allocation || [];
+  const rows = alloc.length ? alloc.map((a) => {
+    if (a.bakeId === b.id) return `<div class="log-row"><span>${esc(a.recipeName)} ${a.count}個</span><span class="lr-v muted">この記録</span></div>`;
+    const o = bakeById(a.bakeId);
+    return o ? `<button class="log-row tap" data-act="nav" data-href="#/record/${o.id}"><span>${esc(a.recipeName)} ${a.count}個</span><span class="lr-v">${o.rating != null ? `<span class="star">${stars(o.rating)}</span> ` : ''}›</span></button>`
+      : `<div class="log-row"><span>${esc(a.recipeName)} ${a.count}個</span><span class="lr-v muted">この記録は削除されています</span></div>`;
+  }).join('') : (mix.allocation || []).map((a) => `<div class="log-row"><span>${esc(a.name)} ${a.count}個</span></div>`).join('');
+  return section('まとめて作った', `<div class="card plan-card">
+    <div class="pc-h bt-h">🧺 生地の作り方：${esc(mix.leadRecipeName || '')}${mix.leadVariantName ? `・${esc(mix.leadVariantName)}` : ''}${mix.label ? `（${esc(mix.label)}）` : ''}</div>
+    ${bx ? `<div class="muted small pc-sub">合計${bx.snapshot.total}個・粉${Math.round(bx.snapshot.totalFlour)}g・1個約${Math.round(bx.snapshot.pieceWeight)}g</div>` : '<div class="muted small pc-sub">まとめて作った時の共通の記録は削除されています</div>'}
+    ${rows}
+  </div>`);
 }
 
 function planCard(b) {
@@ -1367,12 +1577,15 @@ function closeSheet() { $('#sheet-root').innerHTML = ''; document.body.classList
 
 const blobToDataURL = (blob) => new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
 
+const BACKUP_SCHEMA = 2;
 async function exportJSON(withPhotos) {
   const data = {
-    app: 'bread-note', schema: 1, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
+    // schema 2：batches・子Bake（batchId / status:'inBatch'）を含みうる形式（v2.0 以降）。schema 1：それ以前
+    app: 'bread-note', schema: BACKUP_SCHEMA, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
     recipes: await db.getAll('recipes'),
     recipeVersions: await db.getAll('recipeVersions'),
     bakes: await db.getAll('bakes'),
+    batches: await db.getAll('batches'),
     meta: (await db.getAll('meta')).filter((m) => m.key !== 'lastBackupAt'),
     photos: [],
   };
@@ -1404,12 +1617,15 @@ async function importJSON(file, mode) {
   let data;
   try { data = JSON.parse(await file.text()); } catch { toast('JSONを読み込めませんでした'); return; }
   if (data?.app !== 'bread-note' || !Array.isArray(data.recipes)) { toast('パンノートのバックアップではありません'); return; }
+  const schema = data.schema ?? 1;   // schema が無い古いバックアップは 1 として扱う
+  if (!(schema === 1 || schema === 2)) { toast(`このバックアップ（形式 ${schema}）はこの版では読み込めません。アプリを更新してください`); return; }
   const msg = `レシピ${data.recipes.length}件・記録${(data.bakes || []).length}件・写真${(data.photos || []).length}枚を${mode === 'replace' ? '【現在のデータを全て消して】' : ''}復元します。よろしいですか？`;
   if (!confirm(msg)) return;
   if (mode === 'replace') for (const s of db.STORES) await db.clear(s);
   for (const r of data.recipes) await db.put('recipes', r);
   for (const r of data.recipeVersions || []) await db.put('recipeVersions', r);
   for (const b of data.bakes || []) await db.put('bakes', b);
+  for (const x of Array.isArray(data.batches) ? data.batches : []) await db.put('batches', x);   // 古いバックアップには無い → []
   for (const m of data.meta || []) await db.put('meta', m);
   for (const p of data.photos || []) {
     const { dataUrl, type, ...rest } = p;
@@ -1419,6 +1635,7 @@ async function importJSON(file, mode) {
   photoUrls.clear();
   await loadAll();
   await seed();   // 古いバックアップでも、復元直後に移行処理と新レシピの追加を行う
+  await repairBatchChildren();   // 統合で親の無い途中の子Bake が入っても、開き直さずに直す
   applyTheme();
   closeSheet();
   toast('復元しました');
@@ -1482,6 +1699,26 @@ const A = {
     await startBake(r, v, el.dataset.p);
   },
   plan: (el) => { S.ui.plan[el.dataset.r] = el.dataset.p; rerender(); },
+  'batch-new'(el) {
+    const r = recipeById(el.dataset.r); const v = variantOf(r, el.dataset.v);
+    if (startBlocked(v)) return;
+    const pb = C.planBranch(v);
+    const plan = pb ? (pb.options.some((o) => o.id === S.ui.plan[r.id]) ? S.ui.plan[r.id] : pb.options[0].id) : null;
+    S.ui.batch = { rid: r.id, vid: v.id, plan, lead: r.id, sel: { [r.id]: { on: true, vid: v.id, count: 4 } } };
+    go('#/batch/new');
+  },
+  'batch-toggle'(el) {
+    const U = S.ui.batch; const id = el.dataset.r;
+    const sel = (U.sel[id] ||= { on: false, count: 4 });
+    sel.on = !sel.on;
+    if (!sel.on && U.lead === id) U.lead = Object.keys(U.sel).find((k) => U.sel[k].on) || U.rid;
+    if (sel.on && !Object.keys(U.sel).some((k) => k !== id && U.sel[k].on)) U.lead = id;
+    rerender();
+  },
+  'batch-variant'(el) { const U = S.ui.batch; U.sel[el.dataset.r].vid = el.dataset.v; rerender(); },
+  'batch-count'(el) { const sel = S.ui.batch.sel[el.dataset.r]; sel.count = Math.max(1, sel.count + +el.dataset.d); rerender(); },
+  'batch-lead'(el) { S.ui.batch.lead = el.dataset.r; rerender(); },
+  'batch-start': () => { unlockAudio(); return startBatch(); },
   'goto-recipe': (el) => { S.ui.variant[el.dataset.r] = el.dataset.v; go(`#/recipe/${el.dataset.r}`); },
   async 'seed-apply'(el) {
     const r = recipeById(el.dataset.r);
@@ -1499,24 +1736,24 @@ const A = {
     const p = { ...(S.meta.pendingSeed || {}) }; delete p[id]; await setMeta('pendingSeed', p);
     rerender();
   },
-  async 'step-next'(el) { unlockAudio(); const b = bakeById(el.dataset.b); await stepNext(b); rerender(); window.scrollTo(0, 0); },
+  async 'step-next'(el) { unlockAudio(); const b = runById(el.dataset.b); await stepNext(b); rerender(); window.scrollTo(0, 0); },
   async 'step-prev'(el) {
-    const b = bakeById(el.dataset.b); const { fl, idx } = makeCtx(b);
-    if (idx > 0) { const p = fl.list[idx - 1].step; gotoStep(b, p.id); await saveBake(b); rerender(); window.scrollTo(0, 0); }
+    const b = runById(el.dataset.b); const { fl, idx } = makeCtx(b);
+    if (idx > 0) { const p = fl.list[idx - 1].step; gotoStep(b, p.id); await saveRun(b); rerender(); window.scrollTo(0, 0); }
   },
-  async 'goto-step'(el) { const b = bakeById(el.dataset.b); gotoStep(b, el.dataset.s); await saveBake(b); rerender(); },
+  async 'goto-step'(el) { const b = runById(el.dataset.b); gotoStep(b, el.dataset.s); await saveRun(b); rerender(); },
   async branch(el) {
-    const b = bakeById(el.dataset.b); const s = el.dataset.s;
+    const b = runById(el.dataset.b); const s = el.dataset.s;
     b.progress.choices[s] = el.dataset.o;
     const L = (b.progress.log[s] ||= {}); L.doneAt = Date.now(); L.choice = el.dataset.o;
     const { fl } = makeCtx(b);
     const i = fl.list.findIndex((x) => x.step.id === s);
     // drop choices of branches that are no longer on the path
     if (fl.list[i + 1]) gotoStep(b, fl.list[i + 1].step.id);
-    await saveBake(b); rerender(); window.scrollTo(0, 0);
+    await saveRun(b); rerender(); window.scrollTo(0, 0);
   },
   async finish(el) {
-    const b = bakeById(el.dataset.b);
+    const b = runById(el.dataset.b);
     if (b.timers.some((t) => t.parallel && !t.dismissed)) {
       if (!confirm('並行タイマーがまだ動いています。タイマーを終了して記録へ進みますか？')) return;
     }
@@ -1524,57 +1761,83 @@ const A = {
   },
   async 't-start'(el) {
     unlockAudio();
-    const b = bakeById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
+    const b = runById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
     const m = +el.dataset.m;
     const max = s.timer?.max && s.timer.max > m ? s.timer.max : null;
     addTimer(b, s, m, { maxMinutes: max });
-    await saveBake(b); rerender();
+    await saveRun(b); rerender();
+  },
+  async 'bake-out-start'(el) {
+    unlockAudio();
+    const b = runById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
+    const now = Date.now();
+    for (const o of s.bakeOut) {
+      if (o.min == null) continue;
+      const t = addTimer(b, s, o.min, { maxMinutes: o.max && o.max > o.min ? o.max : null, kind: 'bakeOut', label: `${o.name} ${o.count}個 取り出し確認` });
+      Object.assign(t, { startedAt: now, endAt: now + o.min * 60000, scope: 'child', bakeId: b.snapshot.allocation[o.index]?.bakeId });
+      if (o.max && o.max > o.min) t.maxEndAt = now + o.max * 60000;
+    }
+    await saveRun(b); rerender();
   },
   async 't-custom'(el) {
     unlockAudio();
-    const b = bakeById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
+    const b = runById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
     const m = parseFloat(prompt('タイマー（分）', '10'));
     if (!(m > 0)) return;
     addTimer(b, s, m, { kind: 'custom', label: s.title });
-    await saveBake(b); rerender();
+    await saveRun(b); rerender();
   },
-  async 't-pause'(el) { const [b, t] = bt(el); t.pausedRem = Math.max(0, t.endAt - Date.now()); await saveBake(b); rerender(); },
+  async 't-pause'(el) { const [b, t] = bt(el); t.pausedRem = Math.max(0, t.endAt - Date.now()); await saveRun(b); rerender(); },
   async 't-resume'(el) {
     const [b, t] = bt(el); const now = Date.now();
     if (t.maxEndAt) t.maxEndAt = now + t.pausedRem + (t.maxEndAt - t.endAt);
-    t.endAt = now + t.pausedRem; t.pausedRem = null; await saveBake(b); rerender();
+    t.endAt = now + t.pausedRem; t.pausedRem = null; await saveRun(b); rerender();
   },
   async 't-add'(el) {
     const [b, t] = bt(el);
     if (t.pausedRem != null) t.pausedRem += 60000;
     else if (t.firedAt) { t.endAt = Date.now() + 60000; t.firedAt = null; t.durationSec = 60; }
     else { t.endAt += 60000; t.durationSec += 60; }
-    await saveBake(b); rerender();
+    await saveRun(b); rerender();
   },
-  async 't-cancel'(el) { const [b, t] = bt(el); b.timers = b.timers.filter((x) => x.id !== t.id); await saveBake(b); rerender(); },
+  async 't-cancel'(el) { const [b, t] = bt(el); b.timers = b.timers.filter((x) => x.id !== t.id); await saveRun(b); rerender(); },
   async 'ferm-start'(el) {
     unlockAudio();
-    const b = bakeById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
+    const b = runById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
     const L = (b.progress.log[s.id] ||= {}); L.fermentStart = Date.now();
     if (s.ferment.min) addTimer(b, s, s.ferment.min, { maxMinutes: s.ferment.max, kind: 'ferment', label: `${s.title}` });
-    await saveBake(b); rerender();
+    await saveRun(b); rerender();
   },
   async 'ferm-judge'(el) {
-    const b = bakeById(el.dataset.b); const L = (b.progress.log[el.dataset.s] ||= {});
+    const b = runById(el.dataset.b); const L = (b.progress.log[el.dataset.s] ||= {});
     (L.judgements ||= []).push({ at: Date.now(), v: el.dataset.v });
-    await saveBake(b);
+    await saveRun(b);
     if (el.dataset.v === 'done') { await stepNext(b); window.scrollTo(0, 0); }
     rerender();
   },
   async 'cold-start'(el) {
     unlockAudio();
-    const b = bakeById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
+    const b = runById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
     const L = (b.progress.log[s.id] ||= {}); L.coldStart = Date.now();
     addTimer(b, s, s.cold.minH * 60, { maxMinutes: s.cold.maxH * 60, kind: 'ferment', label: `${s.title}（最短）` });
-    await saveBake(b); rerender();
+    await saveRun(b); rerender();
   },
   'make-menu'(el) {
-    const b = bakeById(el.dataset.b);
+    const b = runById(el.dataset.b);
+    if (isBatch(b)) {
+      const first = b.childBakeIds.find((x) => bakeById(x));
+      $('#sheet-root').innerHTML = `
+      <div class="sheet-bg" data-act="close-sheet"></div>
+      <div class="sheet"><div class="sheet-h"><h2>まとめて作る</h2><button class="icon-btn" data-act="close-sheet">${ICON.close}</button></div>
+      <div class="sheet-b">
+        <p class="small muted">開始 ${fmtDateY(b.startedAt)} ${fmtTime(b.startedAt)} ／ ${esc(b.snapshot.allocation.map((a) => `${a.recipeName} ${a.count}個`).join('・'))}</p>
+        ${first ? `<button class="btn block" data-act="nav-close" data-href="#/record/${first}">記録を見る・メモする</button>` : ''}
+        <button class="btn block" data-act="abort" data-b="${b.id}">途中で終了して記録に残す（全部のパン）</button>
+        <button class="btn danger ghost block" data-act="batch-del" data-b="${b.id}">この製作を削除（全部のパン）</button>
+      </div></div>`;
+      document.body.classList.add('sheet-open');
+      return;
+    }
     $('#sheet-root').innerHTML = `
     <div class="sheet-bg" data-act="close-sheet"></div>
     <div class="sheet"><div class="sheet-h"><h2>${esc(b.snapshot.recipeName)} #${b.seq}</h2><button class="icon-btn" data-act="close-sheet">${ICON.close}</button></div>
@@ -1587,13 +1850,27 @@ const A = {
     document.body.classList.add('sheet-open');
   },
   'nav-close': (el) => { closeSheet(); go(el.dataset.href); },
-  async abort(el) { closeSheet(); await finishBake(bakeById(el.dataset.b), 'aborted'); },
+  async abort(el) { closeSheet(); await finishBake(runById(el.dataset.b), 'aborted'); },
+  async 'batch-del'(el) {
+    const x = batchById(el.dataset.b);
+    if (!x || !confirm('まとめて作っている全部のパンの製作を削除します。元に戻せません。')) return;
+    const kids = x.childBakeIds.map(bakeById).filter(Boolean);
+    const dels = [['batches', x.id], ...kids.map((k) => ['bakes', k.id]), ...kids.flatMap((k) => (k.photoIds || []).map((p) => ['photos', p]))];
+    await db.putMany([], dels);
+    S.batches = S.batches.filter((y) => y.id !== x.id);
+    S.bakes = S.bakes.filter((y) => !x.childBakeIds.includes(y.id));
+    closeSheet(); toast('削除しました'); go('#/home');
+  },
   async 'bake-del'(el) {
     if (!confirm('この記録を削除します。元に戻せません。')) return;
     const b = bakeById(el.dataset.b);
-    for (const pid of b.photoIds || []) await db.del('photos', pid);
-    await db.del('bakes', b.id);
+    const dels = [['bakes', b.id], ...(b.photoIds || []).map((p) => ['photos', p])];
+    // まとめて作った最後の1件を消すときだけ、まとめ製作の情報も消すか確認する（allocation は履歴なので書き換えない）
+    const bx = b.batchId ? batchById(b.batchId) : null;
+    if (bx && !bx.childBakeIds.some((id) => id !== b.id && bakeById(id)) && confirm('まとめて作った情報（共通生地の記録）も削除しますか？')) dels.push(['batches', bx.id]);
+    await db.putMany([], dels);
     S.bakes = S.bakes.filter((x) => x.id !== b.id);
+    if (dels.some((d) => d[0] === 'batches')) S.batches = S.batches.filter((x) => x.id !== bx.id);
     closeSheet(); toast('削除しました'); go('#/records');
   },
   async rate(el) {
@@ -1667,7 +1944,7 @@ function withRV(fn, soft = false) {
 let softTimer = null;
 function softRerender() { clearTimeout(softTimer); softTimer = setTimeout(() => { softTimer = null; rerender(); }, 350); }
 function cancelSoftRerender() { if (!softTimer) return false; clearTimeout(softTimer); softTimer = null; return true; }
-function bt(el) { const b = bakeById(el.dataset.b); return [b, b.timers.find((t) => t.id === el.dataset.t)]; }
+function bt(el) { const b = runById(el.dataset.b); return [b, b.timers.find((t) => t.id === el.dataset.t)]; }
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
@@ -1692,9 +1969,10 @@ const ON = {
   }),
   'scale-dim': (el, ev) => { if (ev.type !== 'change') return; withRV((r, v, k) => { const pan = { ...(S.ui.scale[k]?.pan?.custom ? S.ui.scale[k].pan : C.scaleFor(v, S.ui.scale[k]).pan) }; pan[el.dataset.k] = +el.value; pan.name = '入力した型'; pan.custom = true; S.ui.scale[k] = { pan }; }, true); },
   rec: (el) => {
-    const b = bakeById(el.dataset.b); const k = el.dataset.k;
-    if (k.startsWith('env.')) b.env[k.slice(4)] = el.value; else b[k] = el.value;
-    clearTimeout(recTimer); recTimer = setTimeout(() => saveBake(b), 400);
+    // まとめて作った記録の共通生地の値は batch にだけ保存する（子Bakeへコピーしない）
+    const b = el.dataset.batch ? batchById(el.dataset.batch) : bakeById(el.dataset.b); const k = el.dataset.k;
+    if (k.startsWith('env.')) (b.env ||= {})[k.slice(4)] = el.value; else b[k] = el.value;
+    clearTimeout(recTimer); recTimer = setTimeout(() => saveRun(b), 400);
   },
   async 'photo-add'(el, ev) {
     if (ev.type !== 'change' || !el.files?.[0]) return;
@@ -1805,12 +2083,24 @@ async function applySeedRevisions() {
   if (updated.length) setTimeout(() => toast(`標準版に更新：${updated.join('、')}`), 900);
 }
 
+/** 起動時・バックアップ復元後：進行中の Batch が実際に子として持っていない「まとめて作っている途中」の子Bake を、
+ *  単独の途中状態のまま残さない（統合などで起こりうる）。Batch があればその状態に合わせ、無ければ途中終了にする。Batch は作り直さない */
+async function repairBatchChildren() {
+  // 進行中の Batch が実際にその子を持っているときだけ inBatch のまま（Batch を指しているだけでは足りない）
+  for (const fix of C.batchChildRepairs(S.bakes, S.batches)) {
+    const k = bakeById(fix.id);
+    k.status = fix.status; k.finishedAt = fix.finishedAt;
+    await db.put('bakes', k);
+  }
+}
+
 async function boot() {
   window.__breadBooted = true;
   try {
     await db.openDB();
     await loadAll();
     await seed();
+    await repairBatchChildren();
   } catch (e) {
     $('#view').innerHTML = `<div class="pad"><div class="card warn">データベースを開けませんでした：${esc(e.message)}<br>プライベートブラウズでは保存できない場合があります。</div></div>`;
     return;

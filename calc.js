@@ -778,3 +778,216 @@ export function compatVariants(a, b, names = {}) {
   const best = plans.reduce((m, x) => (COMPAT_RANK[x.level] > COMPAT_RANK[m.level] ? x : m), plans[0]);
   return { level: best.level, label: COMPAT_LEVELS[best.level], reasons: best.reasons, plans: plans.length > 1 ? plans : [] };
 }
+
+/** 選んだ発酵計画どうしの判定（V2 の Batch は variant 全体の最良ではなく、実際に使う計画で判定する） */
+export function compatForPlan(a, b, pa = null, pb = null, names = {}) {
+  if (doughSignature(a) !== doughSignature(b)) return { level: null, reasons: [{ key: 'formula', status: 'ng', text: '配合が違う' }] };
+  return comparePair(a, b, planBranch(a) ? pa : null, planBranch(b) ? pb : null, names.a || a.name || 'A', names.b || b.name || 'B');
+}
+
+/* ───────────── V2.0：まとめて作る（Batch＋子Bake） ─────────────
+ * 「同じ生地で同時に作れる」組み合わせだけを、1本の工程として進める。
+ *   prep：パン別 → dough：生地の作り方（lead）の工程を1回 → divide：共通 → shape：パン別
+ *   → proof：共通（全員の時間範囲の重なり） → top：パン別 → bake：共通（最後の段の時間はパン別） → after：パン別
+ * ここでは保存しない純粋な計算だけを行う（開始時に snapshot として固定する）。
+ */
+export const PHASE_ORDER = ['prep', 'dough', 'divide', 'shape', 'proof', 'top', 'bake', 'after'];
+const cloneJ = (o) => JSON.parse(JSON.stringify(o));
+
+/** 個数から scale を作る（count モード：個数、flour モードで分割数あり：粉量を比例させる） */
+export function scaleForCount(v, count) {
+  if (v.scaleMode === 'count') return scaleFor(v, { count });
+  if (v.baseCount) return scaleFor(v, { flour: (v.baseFlour * count) / v.baseCount });
+  return null;
+}
+const memberName = (m) => m.recipe?.name || m.v.name;
+const rangeTxtMin = (r) => (r[0] === r[1] ? `${fmtN(r[0])}分` : `${fmtN(r[0])}〜${fmtN(r[1])}分`);
+/** まとめて作るときの分割重量の比較キー（0.1g 単位） */
+export const batchPieceKey = (v) => { const w = pieceWeight(v); return w == null ? null : Math.round(w * 10); };
+
+/**
+ * members: [{ recipe:{id,name,category,version}, v, count }]
+ * opts: { leadIndex, planId }
+ * 戻り値：{ ok, errors[], ...計画 }（ok:false のときは errors だけ信頼できる）
+ */
+export function planBatch(members, { leadIndex = 0, planId = null } = {}) {
+  const errors = [];
+  if (!Array.isArray(members) || members.length < 2) errors.push('まとめて作るパンを2つ以上選んでください');
+  const list = members || [];
+  const rids = list.map((m) => m.recipe?.id);
+  if (new Set(rids).size !== rids.length) errors.push('同じレシピは1つだけ選べます（A/B などはどちらか1つ）');
+  const lead = list[leadIndex];
+  if (!lead) errors.push('生地の作り方を選んでください');
+  for (const m of list) {
+    const nm = memberName(m);
+    if (!(Number.isInteger(+m.count) && +m.count >= 1)) errors.push(`「${nm}」の個数は1以上の整数にしてください`);
+    const ve = validateVariant(m.v);
+    if (ve.length) errors.push(`「${nm}」：${ve[0]}`);
+    if (m.v.scaleMode === 'panVolume' || !scaleForCount(m.v, 1)) errors.push(`「${nm}」は個数で分けられないため、まとめて作れません（型焼きは V2.0 の対象外）`);
+    const pb = planBranch(m.v);
+    if (pb && !pb.options.some((o) => o.id === planId)) errors.push(`「${nm}」の発酵計画を選んでください`);
+  }
+  if (errors.length) return { ok: false, errors };
+  const planOf = (v) => (planBranch(v) ? planId : null);
+  // 全員の組み合わせが、選んだ計画どうしで「同じ生地で同時に作れる」こと
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    const a = list[i], b = list[j];
+    const c = compatForPlan(a.v, b.v, planOf(a.v), planOf(b.v), { a: memberName(a), b: memberName(b) });
+    if (c.level !== 'same') {
+      const why = c.reasons.filter((x) => x.status !== 'ok' && x.status !== 'note').map((x) => x.text).join('、');
+      errors.push(`「${memberName(a)}」と「${memberName(b)}」は同じ生地で同時に作れません${why ? `（${why}）` : ''}`);
+    }
+  }
+  // 工程の区分が順番どおりに並んでいること（並べ直しても意味が変わらない）
+  const routes = list.map((m) => routeOf(m.v, planOf(m.v)).steps);
+  routes.forEach((st, i) => {
+    let last = -1;
+    for (const s of st) {
+      const k = PHASE_ORDER.indexOf(s.phase);
+      // 知らない区分の工程は並べ方が分からない：黙って捨てずに止める
+      if (k < 0) { errors.push(`「${memberName(list[i])}」にまとめ製作で扱えない工程区分があります（「${s.title || s.id}」：${s.phase ?? 'なし'}）`); break; }
+      if (k < last) { errors.push(`「${memberName(list[i])}」は工程の順番がまとめて作る形に対応していません`); break; }
+      last = k;
+    }
+  });
+  if (errors.length) return { ok: false, errors };
+  // 1つの生地を分けるので、分割重量は実質同一（0.1g 単位で一致）であること。
+  // V1.5 の「±1g なら同じ生地で同時に作れる」は表示用の互換判定で、ここではより厳しく見る
+  const pieceKeys = list.map((m) => batchPieceKey(m.v));
+  if (pieceKeys.some((k) => k == null) || new Set(pieceKeys).size > 1) {
+    errors.push(`分割重量が異なります（${list.map((m) => `${memberName(m)} ${pieceWeight(m.v) == null ? '?' : fmtN(pieceWeight(m.v))}g`).join('／')}）。V2.0では同じ分割重量のパンだけまとめて作れます。`);
+    return { ok: false, errors };
+  }
+
+  // 分量
+  const total = list.reduce((s, m) => s + +m.count, 0);
+  const leadSc = scaleForCount(lead.v, total);
+  const leadAmt = computeAmounts(lead.v, leadSc, planOf(lead.v));
+  const totalFlour = leadSc.flour;
+  const totalDough = leadAmt.dough;
+  const piece = totalDough / total;
+  const cap = lead.v.hb?.capacity;
+  if (lead.v.hb && lead.v.hb.mode !== 'none' && cap && cap.flourMax > 0 && totalFlour > cap.flourMax + 1e-9) {
+    errors.push(`選択したHBコースの粉量上限${cap.flourMax}gを超えています（${Math.round(totalFlour)}g）。個数を減らすか、手ごねを選んでください。`);
+  }
+  const memberSc = list.map((m) => scaleForCount(m.v, +m.count));
+  const memberAmt = list.map((m, i) => computeAmounts(m.v, memberSc[i], planOf(m.v)));
+
+  // 二次発酵：全員の時間範囲の重なり（温度は範囲の重なり、室温は室温）。cue は生地の作り方の工程のもの
+  const proofs = routes.map((st) => st.filter((s) => s.phase === 'proof'));
+  const leadIdx = leadIndex;
+  // 時間範囲を持たないパンの時間を、ほかのパンの時間で補わない（まとめて作るときだけ必須にする）
+  proofs.forEach((ps, i) => ps.forEach((s) => {
+    const f = s.ferment || {};
+    if (!(isNum(f.min) && isNum(f.max) && +f.min > 0 && +f.max >= +f.min)) {
+      errors.push(`「${memberName(list[i])}」の${s.title || '二次発酵'}に時間範囲が設定されていないため、まとめて作れません`);
+    }
+  }));
+  if (errors.length) return { ok: false, errors };
+  const commonProof = proofs[leadIdx].map((ls, k) => {
+    const fs = proofs.map((p) => p[k]?.ferment || {});
+    const min = Math.max(...fs.map((f) => +f.min));
+    const max = Math.min(...fs.map((f) => +f.max));
+    const temps = fs.map((f) => fermentTemp(f));
+    const t = temps.every((x) => x.mode === 'range')
+      ? { tempMode: 'range', tempMin: Math.max(...temps.map((x) => x.min)), tempMax: Math.min(...temps.map((x) => x.max)) }
+      : { tempMode: temps[0].mode === 'ambient' ? 'ambient' : undefined };
+    const each = list.map((m, i) => ({ name: memberName(m), min: fs[i].min ?? null, max: fs[i].max ?? null }));
+    if (min != null && max != null && min > max) {
+      errors.push(`二次発酵の時間が重なりません（${each.map((x) => `${x.name} ${x.min ?? '?'}〜${x.max ?? '?'}分`).join('／')}）。V2.0 ではまとめて作れません`);
+    }
+    return { stepId: ls.id, min, max, ...t, temp: t.tempMode === 'range' ? (t.tempMin === t.tempMax ? `${fmtN(t.tempMin)}℃` : `${fmtN(t.tempMin)}〜${fmtN(t.tempMax)}℃`) : ls.ferment?.temp ?? '', cue: ls.ferment?.cue ?? '', each };
+  });
+  if (errors.length) return { ok: false, errors };
+
+  // 焼成：最後の段の時間はパン別（同じ投入時刻から取り出しをずらす）
+  const bakes = routes.map((st) => st.filter((s) => s.phase === 'bake'));
+  const lastStage = (st) => { const s = st[st.length - 1]; const b = s?.bake || {}; const r = isNum(b.min) ? [+b.min, isNum(b.max) ? +b.max : +b.min] : s?.timer ? [+s.timer.min, +(s.timer.max ?? s.timer.min)] : null; return r; };
+  const outs = list.map((m, i) => ({ index: i, name: memberName(m), count: +m.count, range: lastStage(bakes[i]) }));
+  const bakeOutDiffers = outs.some((o) => !o.range || !outs[0].range || o.range[0] !== outs[0].range[0] || o.range[1] !== outs[0].range[1]);
+  // 多段焼成：最後の段より前の段は温度を切り替える時刻なので、全員の時間範囲の重なりを使う（lead の時間のままにしない）
+  const stageRange = (s) => { const b = s?.bake || {}; return isNum(b.min) ? [+b.min, isNum(b.max) ? +b.max : +b.min] : s?.timer && isNum(s.timer.min) ? [+s.timer.min, isNum(s.timer.max) ? +s.timer.max : +s.timer.min] : null; };
+  const nStage = bakes[leadIdx].length;
+  const midStages = [];
+  for (let k = 0; k < nStage - 1; k++) {
+    const rs = bakes.map((st) => stageRange(st[k]));
+    if (rs.some((r) => !r)) { errors.push(`焼成の${k + 1}段目の時間が設定されていないパンがあるため、まとめて作れません`); continue; }
+    const lo = Math.max(...rs.map((r) => r[0])), hi = Math.min(...rs.map((r) => r[1]));
+    if (lo > hi) errors.push(`焼成の${k + 1}段目の時間が重なりません（${list.map((m, i) => `${memberName(m)} ${rangeTxtMin(rs[i])}`).join('／')}）。まとめて作れません`);
+    midStages[k] = { min: lo, max: hi, each: rs };
+  }
+  if (errors.length) return { ok: false, errors };
+
+  // 工程をつなぐ
+  const rows = {};
+  for (const [id, r] of Object.entries(leadAmt.rows)) rows[`L:${id}`] = r;
+  memberAmt.forEach((a, i) => { for (const [id, r] of Object.entries(a.rows)) rows[`m${i}:${id}`] = r; });
+  const tag = (s, prefix, amt, i = null) => {
+    const x = cloneJ(s);
+    x.id = `${prefix}${s.id}`;
+    x.body = tpl(s.body, amt);
+    if (x.uses) x.uses = x.uses.map((u) => (typeof u === 'string' ? `${prefix}${u}` : { ...u, ref: `${prefix}${u.ref}` }));
+    if (i != null) x.member = { index: i, recipeId: list[i].recipe?.id, name: memberName(list[i]), count: +list[i].count };
+    return x;
+  };
+  const perMember = (phase) => list.flatMap((m, i) => routes[i].filter((s) => s.phase === phase).map((s) => tag(s, `m${i}:`, memberAmt[i], i)));
+  const shared = (phase) => routes[leadIdx].filter((s) => s.phase === phase).map((s) => tag(s, 'L:', leadAmt));
+  const allocation = list.map((m, i) => ({ index: i, recipeId: m.recipe?.id, recipeName: memberName(m), category: m.recipe?.category, variantId: m.v.id, variantName: m.v.name, count: +m.count, doughG: piece * +m.count, bakeId: null }));
+  const divide = shared('divide');
+  if (divide.length) {
+    divide[0].allocation = allocation.map((a) => ({ name: a.recipeName, count: a.count }));   // 内訳は作るモードでチップ表示
+  }
+  const proof = shared('proof').map((s, k) => {
+    const cp = commonProof[k];
+    s.ferment = { ...s.ferment, temp: cp.temp, cue: cp.cue };
+    if (cp.tempMode === 'range') Object.assign(s.ferment, { tempMode: 'range', tempMin: cp.tempMin, tempMax: cp.tempMax });
+    if (cp.min != null) s.ferment.min = cp.min; else delete s.ferment.min;
+    if (cp.max != null) s.ferment.max = cp.max; else delete s.ferment.max;
+    return s;
+  });
+  const bake = shared('bake').map((s, k, arr) => {
+    const ms = midStages[k];
+    if (ms) {
+      const leadR = ms.each[leadIdx];
+      s.bake = { ...(s.bake || {}), min: ms.min, max: ms.max };
+      if (s.timer) { s.timer = { ...s.timer, min: ms.min }; if (ms.max > ms.min) s.timer.max = ms.max; else delete s.timer.max; }
+      if (leadR[0] !== ms.min || leadR[1] !== ms.max) s.tips = [...(s.tips || []), `まとめて作るときの時間：${rangeTxtMin([ms.min, ms.max])}（全部のパンで共通の範囲。本文の時間より優先）`];
+    }
+    // ほかのパンの焼成の注意も載せる（名前つき）
+    const extra = list.flatMap((m, i) => (i === leadIdx ? [] : (bakes[i][k]?.tips || []).filter((t) => !(s.tips || []).includes(t)).map((t) => `${memberName(m)}：${t}`)));
+    if (extra.length) s.tips = [...(s.tips || []), ...extra];
+    if (k === arr.length - 1 && bakeOutDiffers) s.bakeOut = outs.map((o) => ({ index: o.index, name: o.name, count: o.count, min: o.range?.[0] ?? null, max: o.range?.[1] ?? null }));
+    return s;
+  });
+  const steps = [...perMember('prep'), ...shared('dough'), ...divide, ...perMember('shape'), ...proof, ...perMember('top'), ...bake, ...perMember('after')];
+  const title = allocation.map((a) => `${a.recipeName}${a.count}`).join('・');
+  return {
+    ok: true, errors: [],
+    title, total, planId,
+    lead: { index: leadIdx, recipeId: lead.recipe?.id, recipeName: memberName(lead), variantId: lead.v.id, variantName: lead.v.name, hb: lead.v.hb ? cloneJ(lead.v.hb) : null },
+    familyId: lead.v.dough?.familyId || null, signature: doughSignature(lead.v),
+    totalFlour, totalDough, pieceWeight: piece,
+    leadScale: leadSc, leadAmounts: leadAmt, memberScales: memberSc, memberAmounts: memberAmt,
+    allocation, commonProof, bakeOut: bakeOutDiffers ? outs : null,
+    steps,
+    amounts: { rows, groups: [], flour: totalFlour, dough: totalDough, count: total, piece, plan: planId },
+  };
+}
+
+/**
+ * 起動時・バックアップ復元後の修復：「まとめて作っている途中」（inBatch）なのに、
+ * 進行中の Batch がそれを子として持っていない子Bake を、単独の途中状態のまま残さない。
+ * 戻り値：[{ id, status, finishedAt }]（Batch があればその状態、無ければ aborted）。Batch を作り直すことはしない
+ */
+export function batchChildRepairs(bakes, batches, now = Date.now()) {
+  const byId = new Map((batches || []).map((x) => [x.id, x]));
+  const out = [];
+  for (const k of bakes || []) {
+    if (k.status !== 'inBatch') continue;
+    const x = byId.get(k.batchId);
+    if (x && x.status === 'active' && (x.childBakeIds || []).includes(k.id)) continue;
+    const status = x && x.status !== 'active' ? x.status : 'aborted';
+    out.push({ id: k.id, status, finishedAt: k.finishedAt || x?.finishedAt || k.updatedAt || now });
+  }
+  return out;
+}

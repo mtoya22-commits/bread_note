@@ -713,5 +713,169 @@ console.log('v1.5-7. 判定の優先順位・variant 単位');
   ok('ラベル4種', C.COMPAT_LEVELS.same === '同じ生地で同時に作れる' && C.COMPAT_LEVELS.split === '生地は一緒に仕込める（途中から別工程）' && C.COMPAT_LEVELS.nojudge === '同じ配合（同時製作判定なし）' && C.COMPAT_LEVELS.family === '同じ系統・配合違い');
 }
 
+/* ───────────────────────── V2.0 まとめて作る ───────────────────────── */
+const M = (id, vid, count, v = null) => { const r = R(id); return { recipe: { id: r.id, name: r.name, category: r.category, version: r.version }, v: v || (vid ? r.variants.find((x) => x.id === vid) : r.variants[0]), count }; };
+
+console.log('v2-1. planBatch：基本（あんぱんB・クリーム・チョコ 各4個）');
+{
+  const p = C.planBatch([M('anpan', 'hand', 4), M('cream-pan', null, 4), M('choco-pan', null, 4)], { leadIndex: 0 });
+  ok('開始できる', p.ok, p.errors.join());
+  ok('合計12個・粉300g・1個 約48.7g', p.total === 12 && Math.abs(p.totalFlour - 300) < 1e-9 && Math.abs(p.pieceWeight - 48.675) < 0.01, [p.total, p.totalFlour, p.pieceWeight].join());
+  ok('allocation：各4個・生地量＝1個の生地量×個数・合計＝生地総量', p.allocation.every((a) => a.count === 4 && Math.abs(a.doughG - p.pieceWeight * 4) < 1e-9) && Math.abs(p.allocation.reduce((s2, a) => s2 + a.doughG, 0) - p.totalDough) < 1e-6);
+  const ph = p.steps.map((s2) => C.PHASE_ORDER.indexOf(s2.phase));
+  ok('工程は区分の順（prep→dough→divide→shape→proof→top→bake→after）', ph.every((x, i) => i === 0 || x >= ph[i - 1]));
+  const by = (phase) => p.steps.filter((s2) => s2.phase === phase);
+  ok('prep はパン別（3つのパンの下準備）', by('prep').every((s2) => s2.member) && new Set(by('prep').map((s2) => s2.member.index)).size === 3);
+  ok('dough は生地の作り方（あんぱんB・手ごね）の工程だけ・共通', by('dough').every((s2) => !s2.member && s2.id.startsWith('L:h')) && by('dough').length === 7);
+  ok('divide は共通1つ・内訳つき', by('divide').length === 1 && by('divide')[0].allocation.length === 3 && /12分割/.test(by('divide')[0].body));
+  ok('shape・top・after はパン別', ['shape', 'top', 'after'].every((k) => by(k).length === 3 && by(k).every((s2) => s2.member)));
+  ok('proof・bake は共通1つ', by('proof').length === 1 && !by('proof')[0].member && by('bake').length === 1 && !by('bake')[0].member);
+  ok('二次発酵：共通範囲 32〜35℃ 40〜60分・目安（cue）を残す', (() => { const f = by('proof')[0].ferment; return f.tempMin === 32 && f.tempMax === 35 && f.min === 40 && f.max === 60 && /ひと回りふっくら/.test(f.cue); })());
+  ok('焼き時間が同じなら bakeOut なし', !by('bake')[0].bakeOut && p.bakeOut === null);
+  ok('カスタード冷却は parallel のまま', p.steps.find((s2) => s2.id === 'm1:cp1')?.parallel === true);
+  ok('本文のテンプレートは開始時に埋める（{{ }} が残らない）', p.steps.every((s2) => !/\{\{/.test(s2.body || '')), p.steps.filter((s2) => /\{\{/.test(s2.body || '')).map((s2) => s2.id).join());
+  ok('パン別の工程はそのパンの個数で（あんこ4等分・カスタード4個分）', /あんこを4等分/.test(p.steps.find((s2) => s2.id === 'm0:h0').body) && /4個分炊く/.test(p.steps.find((s2) => s2.id === 'm1:cp0').body));
+  ok('使う材料（uses）はすべて分量に対応', p.steps.every((s2) => (s2.uses || []).every((u) => p.amounts.rows[typeof u === 'string' ? u : u.ref])));
+  ok('生地の材料は合計12個分（牛乳 180g）', p.amounts.rows['L:milk'].g === 180);
+  ok('クリームパンの下準備：カスタード4個分×1回', p.memberAmounts[1].groups.find((g) => g.id === 'custard').prep.units === 1);
+  ok('子Bake 用の分量はそれぞれの個数（チョコ 4個）', p.memberAmounts[2].count === 4 && p.memberScales[2].count === 4);
+  ok('クリームパンの焼成の注意を名前つきで共通工程へ', (by('bake')[0].tips || []).some((t) => /^基本のクリームパン：12分/.test(t)));
+}
+
+console.log('v2-2. planBatch：開始できない条件');
+{
+  const E = (members, o = {}) => C.planBatch(members, o).errors.join(' / ');
+  ok('1つだけ：不可', /2つ以上/.test(E([M('cream-pan', null, 4)])));
+  ok('同じレシピの A と B：不可', /同じレシピは1つだけ/.test(E([M('anpan', 'hb', 4), M('anpan', 'hand', 4)])));
+  ok('個数 0・2.5：不可', /個数は1以上の整数/.test(E([M('anpan', 'hb', 0), M('cream-pan', null, 4)])) && /個数は1以上の整数/.test(E([M('anpan', 'hb', 2.5), M('cream-pan', null, 4)])));
+  const hb13 = C.planBatch([M('cream-pan', null, 5), M('choco-pan', null, 4), M('anpan', 'hb', 4)], { leadIndex: 0 });
+  ok('HB（パン生地 320g）で13個＝粉325g：不可・文言', !hb13.ok && hb13.errors.includes('選択したHBコースの粉量上限320gを超えています（325g）。個数を減らすか、手ごねを選んでください。'), hb13.errors.join());
+  ok('12個＝粉300g：可', C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4), M('anpan', 'hb', 4)]).ok);
+  ok('同じ13個でも手ごね（あんぱんB）を生地の作り方にすれば可', C.planBatch([M('cream-pan', null, 5), M('choco-pan', null, 4), M('anpan', 'hand', 4)], { leadIndex: 2 }).ok);
+  const hot = clone(R('choco-pan').variants[0]); hot.steps.find((s2) => s2.phase === 'bake').bake.temp = 190;
+  ok('「同じ生地で同時に作れる」でない組（焼成 190℃）：不可・理由つき', /同じ生地で同時に作れません.*焼成条件が違う/.test(E([M('cream-pan', null, 4), M('choco-pan', null, 4, hot)])));
+  const late = clone(R('choco-pan').variants[0]); Object.assign(late.steps.find((s2) => s2.phase === 'proof').ferment, { min: 70, max: 90 });
+  ok('二次発酵の時間が重ならない（40〜60 × 70〜90）：不可', /二次発酵の時間が重なりません/.test(E([M('cream-pan', null, 4), M('choco-pan', null, 4, late)])));
+  const mid = clone(R('choco-pan').variants[0]); Object.assign(mid.steps.find((s2) => s2.phase === 'proof').ferment, { min: 45, max: 60 });
+  const pm = C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4, mid), M('anpan', 'hb', 4)]);
+  ok('40〜60 × 45〜60：共通範囲 45〜60分', pm.ok && pm.commonProof[0].min === 45 && pm.commonProof[0].max === 60, JSON.stringify(pm.commonProof));
+  ok('型焼き（食パン B・C）：不可', /型焼き/.test(E([M('shokupan-junnama', 'hb-pan12', 1), M('cream-pan', null, 4)])));
+  const nomix = clone(R('choco-pan').variants[0]); nomix.mix = false;
+  ok('mix:false の variant：不可', !C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4, nomix)]).ok);
+  const bad = clone(R('choco-pan').variants[0]); bad.steps = [];
+  ok('入力チェックに通らない variant：不可', /工程を1つ以上/.test(E([M('cream-pan', null, 4), M('choco-pan', null, 4, bad)])));
+}
+
+console.log('v2-3. 焼き時間が違う・発酵計画');
+{
+  const t = clone(R('choco-pan').variants[0]); const bs = t.steps.find((s2) => s2.phase === 'bake'); bs.bake.min = 13; bs.bake.max = 16;
+  const p = C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4, t)]);
+  const bake = p.steps.find((s2) => s2.phase === 'bake');
+  ok('最終段の焼き時間が違う：判定は下げず、パンごとの取り出し（12〜15／13〜16分）', p.ok && bake.bakeOut?.length === 2 && bake.bakeOut[0].min === 12 && bake.bakeOut[1].min === 13 && bake.bakeOut[1].max === 16, JSON.stringify(bake.bakeOut));
+  // 発酵計画：選んだ計画どうしで判定する（variant 全体の最良ではない）
+  const rd = R('rodev-90').variants[0];
+  const rd2 = clone(rd); C.findStep(rd2.steps, 'cd-bake2').bake.temp = 240;   // 冷蔵ルートだけ焼成が違う
+  const mem = [M('rodev-90', null, 2), { recipe: { id: 'rodev-copy', name: '私のロデヴ', category: '高加水', version: 1 }, v: rd2, count: 2 }];
+  ok('全体の判定は same（当日×当日が一致）', C.compatVariants(rd, rd2).level === 'same');
+  ok('当日焼きを選んだ Batch：可', C.planBatch(mem, { planId: 'today' }).ok);
+  ok('冷蔵発酵を選んだ Batch：不可（選んだ計画の条件で判定）', /焼成条件が違う/.test(C.planBatch(mem, { planId: 'cold' }).errors.join()));
+  ok('計画を選んでいない：不可', /発酵計画を選んで/.test(C.planBatch(mem, { planId: null }).errors.join()));
+  const pt = C.planBatch(mem, { planId: 'today' });
+  ok('当日焼き：イーストは当日の量・工程に冷蔵なし・2段焼成は共通', pt.amounts.rows['L:yeast'].g != null && !pt.steps.some((s2) => s2.cold) && pt.steps.filter((s2) => s2.phase === 'bake').length === 2, pt.steps.map((s2) => s2.id).join());
+  ok('ロデヴ（粉基準・分割数あり）も個数で分けられる：4個＝粉500g', Math.abs(pt.totalFlour - 500) < 1e-9);
+}
+
+console.log('v2.0.1-1. まとめて作るときの分割重量は 0.1g 単位で一致');
+{
+  const withPiece = (w) => { const v = clone(R('cream-pan').variants[0]); v.baseFlour = 200 * w / 48.675; return v; };
+  const an = M('anpan', 'hand', 4);
+  ok('48.675g × 48.675g：可', C.planBatch([an, M('cream-pan', null, 4)]).ok);
+  const v2 = withPiece(48.70);
+  ok('48.675g × 48.70g（同じ 0.1g）：可', Math.abs(C.pieceWeight(v2) - 48.70) < 1e-9 && C.planBatch([an, M('cream-pan', null, 4, v2)]).ok);
+  const v3 = withPiece(49.575);
+  ok('48.675g × 49.575g：V1.5 の判定は same のまま', Math.abs(C.pieceWeight(v3) - 49.575) < 1e-9 && C.compatVariants(an.v, v3).level === 'same' && C.compatForPlan(an.v, v3).level === 'same');
+  const p3 = C.planBatch([an, M('cream-pan', null, 4, v3)]);
+  ok('48.675g × 49.575g：まとめて作るのは不可・文言', !p3.ok && p3.errors.some((e) => e === '分割重量が異なります（基本のあんぱん 48.7g／基本のクリームパン 49.6g）。V2.0では同じ分割重量のパンだけまとめて作れます。'), p3.errors.join());
+  ok('不可のときは allocation・子Bake 用の分量を作らない（矛盾する値が出ない）', p3.allocation === undefined && p3.memberAmounts === undefined && p3.steps === undefined);
+  const v4 = withPiece(48.64);
+  ok('48.675g × 48.64g（0.1g 単位で 48.7 と 48.6）：不可', !C.planBatch([an, M('cream-pan', null, 4, v4)]).ok);
+  ok('batchPieceKey：48.675 → 487・48.70 → 487', C.batchPieceKey(an.v) === 487 && C.batchPieceKey(v2) === 487);
+}
+
+console.log('v2.0.1-2. 知らない工程区分があれば止める（黙って捨てない）');
+{
+  const add = (pos) => { const v = clone(R('choco-pan').variants[0]); const st = { id: 'x', title: '重要な工程', phase: 'foo', body: '' }; if (pos === 'first') v.steps.unshift(st); else if (pos === 'last') v.steps.push(st); else v.steps.splice(5, 0, st); return v; };
+  for (const [pos, label] of [['first', '先頭'], ['mid', '途中'], ['last', '最後']]) {
+    const v = add(pos);
+    const pp = C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4, v)]);
+    ok(`${label}に phase:'foo'：不可（「重要な工程」を名指し）`, C.phaseComplete(v) && C.compatVariants(R('cream-pan').variants[0], v).level === 'same' && !pp.ok && pp.errors.some((e) => /扱えない工程区分/.test(e) && /重要な工程/.test(e)), pp.errors.join());
+  }
+  const all8 = C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4), M('anpan', 'hb', 4)]);
+  ok('既存の8区分だけなら従来どおり可・工程は1つも落ちない', all8.ok && all8.steps.length === [M('cream-pan', null, 4), M('choco-pan', null, 4), M('anpan', 'hb', 4)].reduce((n, m) => n + m.v.steps.length, 0) - 2 * (3 + 1 + 1 + 1) , `${all8.steps.length}`);
+}
+
+console.log('v2.0.2-1. 二次発酵：全員が時間範囲を持つときだけまとめて作れる');
+{
+  const noTime = () => { const v = clone(R('cream-pan').variants[0]); const f = v.steps.find((s2) => s2.phase === 'proof').ferment; delete f.min; delete f.max; return v; };
+  const t45 = clone(R('choco-pan').variants[0]); Object.assign(t45.steps.find((s2) => s2.phase === 'proof').ferment, { min: 45, max: 60 });
+  const p1 = C.planBatch([M('anpan', 'hb', 4), M('choco-pan', null, 4, t45)]);
+  ok('40〜60 × 45〜60：可・共通 45〜60分', p1.ok && p1.commonProof[0].min === 45 && p1.commonProof[0].max === 60 && p1.steps.find((s2) => s2.phase === 'proof').ferment.min === 45);
+  const nt = noTime();
+  ok('時間なしの二次発酵も、通常の入力チェックでは許可のまま', C.validateVariant(nt).length === 0);
+  ok('   V1.5 の判定も same のまま（温度で判定）', C.compatVariants(R('anpan').variants[0], nt).level === 'same');
+  const p2 = C.planBatch([M('anpan', 'hb', 4), M('cream-pan', null, 4, nt)]);
+  ok('40〜60 × 時間なし：不可（ほかのパンの時間で補わない）・文言', !p2.ok && p2.errors.includes('「基本のクリームパン」の二次発酵に時間範囲が設定されていないため、まとめて作れません'), p2.errors.join());
+  const nt2 = clone(R('choco-pan').variants[0]); const f2 = nt2.steps.find((s2) => s2.phase === 'proof').ferment; delete f2.min; delete f2.max;
+  ok('時間なし × 時間なし：不可', !C.planBatch([M('cream-pan', null, 4, nt), M('choco-pan', null, 4, nt2)]).ok);
+  const onlyMin = clone(R('choco-pan').variants[0]); delete onlyMin.steps.find((s2) => s2.phase === 'proof').ferment.max;
+  ok('最短だけ（最長なし）：不可', !C.planBatch([M('anpan', 'hb', 4), M('choco-pan', null, 4, onlyMin)]).ok);
+}
+
+console.log('v2.0.2-2. 多段焼成：途中の段は全員の時間範囲の重なりを使う');
+{
+  const rd = R('rodev-90').variants[0];
+  const withStages = (s1, s2x) => {
+    const v = clone(rd);
+    for (const p of ['td', 'cd']) {
+      const a = C.findStep(v.steps, `${p}-bake1`), b = C.findStep(v.steps, `${p}-bake2`);
+      if (s1) { a.bake.min = s1[0]; a.bake.max = s1[1]; a.timer = { ...a.timer, min: s1[0], ...(s1[1] > s1[0] ? { max: s1[1] } : {}) }; if (s1[1] === s1[0]) delete a.timer.max; }
+      if (s2x) { b.bake.min = s2x[0]; b.bake.max = s2x[1]; b.timer = { ...b.timer, min: s2x[0], max: s2x[1] }; }
+    }
+    return v;
+  };
+  const mem = (a, b) => [{ recipe: { id: 'rA', name: 'ロデヴA', category: '高加水', version: 1 }, v: a, count: 2 }, { recipe: { id: 'rB', name: 'ロデヴB', category: '高加水', version: 1 }, v: b, count: 2 }];
+  const A = withStages([10, 12]), B = withStages([11, 13]);
+  ok('第1段 10〜12 × 11〜13：V1.5 は same', C.compatForPlan(A, B, 'today', 'today').level === 'same');
+  const p = C.planBatch(mem(A, B), { planId: 'today' });
+  const s1 = p.steps.find((x) => x.id === 'L:td-bake1');
+  ok('まとめて作れる・生成された第1段は 11〜12分（timer と bake の両方）', p.ok && s1.timer.min === 11 && s1.timer.max === 12 && s1.bake.min === 11 && s1.bake.max === 12, JSON.stringify([s1?.timer, s1?.bake]));
+  ok('   lead の時間と違うので、共通の時間を注記', (s1.tips || []).some((t) => /まとめて作るときの時間：11〜12分/.test(t)));
+  const p2 = C.planBatch(mem(withStages([10, 11]), withStages([12, 13])), { planId: 'today' });
+  ok('第1段 10〜11 × 12〜13：不可', !p2.ok, p2.errors.join());
+  const p3 = C.planBatch(mem(clone(rd), clone(rd)), { planId: 'today' });
+  const s3 = p3.steps.find((x) => x.id === 'L:td-bake1');
+  ok('第1段 10 × 10：従来どおり 10分（注記なし）', p3.ok && s3.timer.min === 10 && s3.timer.max == null && s3.bake.min === 10 && !(s3.tips || []).some((t) => /まとめて作るときの時間/.test(t)), JSON.stringify(s3?.timer));
+  const p4 = C.planBatch(mem(withStages(null, [15, 18]), withStages(null, [16, 20])), { planId: 'today' });
+  const last = p4.steps.find((x) => x.id === 'L:td-bake2');
+  ok('最終段 15〜18 × 16〜20：可・パン別の取り出しタイマーのまま', p4.ok && last.bakeOut?.length === 2 && last.bakeOut[0].min === 15 && last.bakeOut[1].max === 20, JSON.stringify(last?.bakeOut));
+  ok('   最終段の時間は共通範囲に書き換えない', last.bake.min === 15 && last.bake.max === 18);
+}
+
+console.log('v2.0.2-3. 途中の子Bake の修復（進行中の Batch が実際に持っているか）');
+{
+  const kid = (id, batchId) => ({ id, batchId, status: 'inBatch', updatedAt: 5 });
+  const batches = [
+    { id: 'bA', status: 'active', childBakeIds: ['k1'] },
+    { id: 'bD', status: 'done', finishedAt: 9, childBakeIds: ['k3'] },
+  ];
+  const fixes = C.batchChildRepairs([kid('k1', 'bA'), kid('k2', 'bA'), kid('k3', 'bD'), kid('k4', 'none'), { id: 'k5', status: 'done' }], batches, 100);
+  const f = Object.fromEntries(fixes.map((x) => [x.id, x]));
+  ok('進行中の Batch が childBakeIds に持つ子：inBatch のまま', !f.k1);
+  ok('進行中の Batch を指すが childBakeIds に無い子：途中終了へ', f.k2?.status === 'aborted');
+  ok('完了した Batch の子：done へ（finishedAt は Batch のもの）', f.k3?.status === 'done' && f.k3.finishedAt === 9);
+  ok('親の無い子：途中終了へ', f.k4?.status === 'aborted' && f.k4.finishedAt === 5);
+  ok('inBatch 以外は触らない', !f.k5 && fixes.length === 3);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;
