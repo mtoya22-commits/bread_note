@@ -526,7 +526,8 @@ console.log('v1.5-1. 標準レシピの構造化データ');
   ok('カレーパン：揚げは phase:bake ＋ method:fry', fry.phase === 'bake' && fry.bake.method === 'fry' && fry.bake.tempMin === 170 && fry.bake.tempMax === 175);
   ok('カレーパン：系統 curry-bread-dough', cu.dough?.familyId === 'curry-bread-dough');
   ok('新しい系統が DOUGH_FAMILIES にある', (() => { const f = DOUGH_FAMILIES; return f['lean-high-hydration'] && f['rich-shokupan'] && f['curry-bread-dough']; })());
-  ok('seedRev は上げていない（メタデータのみ）', R('curry-pan').seedRev === 2 && R('rodev-90').seedRev === 3 && R('shokupan-junnama').seedRev === 3 && R('anpan').seedRev === 2 && R('cream-pan').seedRev === 1 && R('choco-pan').seedRev === 1);
+  // v2.0.3 でカレーパンは内容の改訂（rev3）をしたので 3。V1.5 のメタデータ追加では上げていない
+  ok('seedRev は上げていない（メタデータのみ）', R('curry-pan').seedRev === 3 && R('rodev-90').seedRev === 3 && R('shokupan-junnama').seedRev === 3 && R('anpan').seedRev === 2 && R('cream-pan').seedRev === 1 && R('choco-pan').seedRev === 1);
 }
 
 console.log('v1.5-2. SEED_VERSION 6 → 7 の移行（メタデータだけ）');
@@ -875,6 +876,61 @@ console.log('v2.0.2-3. 途中の子Bake の修復（進行中の Batch が実際
   ok('完了した Batch の子：done へ（finishedAt は Batch のもの）', f.k3?.status === 'done' && f.k3.finishedAt === 9);
   ok('親の無い子：途中終了へ', f.k4?.status === 'aborted' && f.k4.finishedAt === 5);
   ok('inBatch 以外は触らない', !f.k5 && fixes.length === 3);
+}
+
+console.log('v2.0.3. カレーパン rev3（A：ベーキングパウダー／B：イースト）');
+{
+  const r = R('curry-pan');
+  const [A, B] = r.variants;
+  ok('seedRev 3・2通り（A は従来の id std のまま、B は yeast）', r.seedRev === 3 && r.variants.length === 2 && A.id === 'std' && B.id === 'yeast');
+  ok('両方とも入力チェックを通り、工程データがそろう', [A, B].every((v) => C.validateVariant(v).length === 0 && C.phaseComplete(v)));
+  const aa = C.computeAmounts(A, C.scaleFor(A, {}));
+  ok('A の配合は従来どおり（粉150g・生地 約268g・1本 約44.7g）', Math.abs(aa.dough - 268) < 1e-9 && Math.abs(aa.piece - 44.667) < 0.01);
+  ok('A の配合の指紋も従来どおり（配合は変えていない）', C.doughSignature(A) === C.doughSignature(normalizeVariant({ baseFlour: 150, ingredientGroups: [
+    { id: 'flour', kind: 'flour', items: [{ id: 'haru', name: '春よ恋', g: 100 }, { id: 'kitano', name: 'キタノカオリ', g: 20 }, { id: 'lys', name: 'リスドォル', g: 15 }, { id: 'tapioca', name: 'タピオカ粉', g: 15 }] },
+    { id: 'dough', kind: 'dough', items: [{ id: 'sugar', name: '砂糖', g: 15 }, { id: 'salt', name: '塩', g: 2 }, { id: 'bp', name: 'ベーキングパウダー', g: 3 }, { id: 'skim', name: 'スキムミルク', g: 8 }, { id: 'egg', name: '全卵', g: 30 }, { id: 'water', name: '水', g: { target: 50, min: 45, max: 55 } }, { id: 'oil', name: '米油またはサラダ油', g: 10 }] }] })));
+  const ba = C.computeAmounts(B, C.scaleFor(B, {}));
+  const g = (id) => ba.rows[id].g;
+  ok('B：春よ恋120・キタノカオリ15・タピオカ15・砂糖15・塩2.3・イースト2.3・スキム6・卵23・水60〜70・バター12', g('haru') === 120 && g('kitano') === 15 && g('tapioca') === 15 && g('sugar') === 15 && g('salt') === 2.3 && g('yeast') === 2.3 && g('skim') === 6 && g('egg') === 23 && g('water') === 60 && ba.rows.water.max === 70 && g('butter') === 12);
+  ok('B：1本 約45g（生地 約270g）', Math.abs(ba.piece - 45) < 0.1);
+  ok('衣：薄力粉＋水（6本で 15g・22g）・中目パン粉', aa.rows.bflour.g === 15 && Math.round(aa.rows.bwater.raw) === 22 && aa.rows.panko.name === '中目パン粉' && !aa.rows.cwater);
+  ok('衣の量は本数に比例（12本で薄力粉30g）', C.computeAmounts(A, C.scaleFor(A, { count: 12 })).rows.bflour.g === 30);
+  ok('A・B は同じ系統・配合違い（まとめて作る対象ではない）', C.compatVariants(A, B).level === 'family' && A.dough.familyId === 'curry-bread-dough' && B.dough.familyId === 'curry-bread-dough');
+  const fry = (v) => v.steps.find((s2) => s2.phase === 'bake');
+  ok('揚げ：A 170〜175℃ 3〜4分／B 170℃ 4分（phase:bake・method:fry）', fry(A).bake.method === 'fry' && fry(A).bake.tempMin === 170 && fry(A).bake.tempMax === 175 && fry(B).bake.method === 'fry' && fry(B).bake.tempMin === 170 && fry(B).bake.max === 4);
+  ok('揚げは2本ずつ・網に立てかけて油を切る（A・B とも本文に）', [A, B].every((v) => /2本ずつ/.test(fry(v).body) && /立てかけ/.test(fry(v).body)));
+  ok('B：衣を付けてから二次発酵（30〜35℃ 20〜25分）', (() => { const i = B.steps.findIndex((s2) => s2.id === 'y8'); const pr = B.steps.find((s2) => s2.phase === 'proof'); return i >= 0 && B.steps.indexOf(pr) > i && pr.ferment.min === 20 && pr.ferment.max === 25 && pr.ferment.tempMin === 30 && pr.ferment.tempMax === 35; })());
+  ok('B：工程の区分は順番どおり（衣は成形の区分）', (() => { let last = -1; return B.steps.every((s2) => { const k = C.PHASE_ORDER.indexOf(s2.phase); const okk = k >= last; last = k; return okk; }); })());
+  ok('使う材料（uses）はすべて材料にある', [A, B].every((v) => { const a = C.computeAmounts(v, C.scaleFor(v, {})); return v.steps.every((s2) => (s2.uses || []).every((u) => a.rows[typeof u === 'string' ? u : u.ref])); }));
+  ok('本文のテンプレートがすべて埋まる', [A, B].every((v) => { const a = C.computeAmounts(v, C.scaleFor(v, {})); return v.steps.every((s2) => !/\{\{/.test(C.tpl(s2.body, a))); }));
+  ok('冷凍の手順を tips に（A：揚げる前／B：揚げた後）', A.tips.some((t) => /冷凍.*160〜165℃/.test(t)) && B.tips.some((t) => /冷凍.*200℃/.test(t)));
+  ok('説明文とタグ（「発酵なし」タグは外す）', !r.tags.includes('発酵なし') && /A：/.test(r.description) && /B：/.test(r.description));
+}
+
+console.log('v2.0.4. 外パリ中ふわフランスパン（4つの形）');
+{
+  const r = R('french-soft');
+  ok('標準レシピに追加（7件目）・4つの形', seeds.length === 7 && r && r.variants.map((v) => v.id).join() === 'baguette,batard,coupe,mentai' && r.category === 'ハード系');
+  ok('すべて入力チェックを通り、工程データがそろう', r.variants.every((v) => C.validateVariant(v).length === 0 && C.phaseComplete(v)));
+  const amt = (v) => C.computeAmounts(v, C.scaleFor(v, {}));
+  const a = amt(r.variants[0]);
+  ok('共通生地：春よ恋180・リスドォル120・水207・塩6・イースト1.0・砂糖3（生地 517g・加水69%）', a.rows.haru.g === 180 && a.rows.lys.g === 120 && a.rows.water.g === 207 && a.rows.salt.g === 6 && a.rows.yeast.g === 1 && a.rows.sugar.g === 3 && Math.round(a.dough) === 517 && Math.round(a.hydration) === 69);
+  ok('4つの形は同じ配合（同じ系統・同じ指紋）', new Set(r.variants.map((v) => C.doughSignature(v))).size === 1 && r.variants.every((v) => v.dough.familyId === 'french-soft') && DOUGH_FAMILIES['french-soft']);
+  ok('ロデヴとは別の系統・別の配合', C.compatVariants(r.variants[0], R('rodev-90').variants[0]).level === null);
+  ok('分割：バゲット2本 約259g／バタール1本 517g／クッペ・明太 4個 約129g', [[0, 258.5], [1, 517], [2, 129.25], [3, 129.25]].every(([i, w]) => Math.abs(amt(r.variants[i]).piece - w) < 0.01));
+  ok('単位：バゲット・バタールは「本」、クッペ・明太は「個」', r.variants.map((v) => v.countUnit).join() === '本,本,個,個');
+  const stages = (v) => v.steps.filter((s) => s.phase === 'bake').map((s) => [s.bake.temp, s.bake.min, s.bake.max, !!s.bake.steam, s.bake.preheat ?? null]);
+  ok('バゲット：250℃予熱・250℃蒸気7分 → 220℃ 10〜12分', JSON.stringify(stages(r.variants[0])) === JSON.stringify([[250, 7, 7, true, 250], [220, 10, 12, false, null]]));
+  ok('バタール：250℃予熱 → 230℃蒸気7分 → 215℃ 18〜23分（中心95℃の目安）', JSON.stringify(stages(r.variants[1])) === JSON.stringify([[230, 7, 7, true, 250], [215, 18, 23, false, null]]) && /95℃/.test(r.variants[1].steps.find((s) => s.id === 'bt-bake2').body));
+  ok('クッペ（プレーン）：230℃蒸気6分 → 210℃ 7〜9分（合計13〜15分）', JSON.stringify(stages(r.variants[2])) === JSON.stringify([[230, 6, 6, true, 250], [210, 7, 9, false, null]]));
+  ok('明太フランス：230℃蒸気6分 → 210℃ 5〜7分（淡く）→ 塗って 190℃ 4〜6分', JSON.stringify(stages(r.variants[3])) === JSON.stringify([[230, 6, 6, true, 250], [210, 5, 7, false, null], [190, 4, 6, false, null]]));
+  const m = amt(r.variants[3]);
+  ok('明太バターは1.5倍（4個で明太子50g・バター45g・マヨネーズ12g）・個数に比例', m.rows.mentaiko.g === 50 && m.rows.mbutter.g === 45 && m.rows.mayo.g === 12 && C.computeAmounts(r.variants[3], C.scaleFor(r.variants[3], { flour: 150 })).rows.mentaiko.g === 25);
+  ok('バゲットのクープ：斜めに3〜4本・浅め', /斜めに3〜4本/.test(r.variants[0].steps.find((s) => s.phase === 'top').body));
+  ok('こねの目安（手ごね8〜10分）', r.variants.every((v) => v.steps.some((s) => s.timer && s.timer.min === 8 && s.timer.max === 10 && /8〜10分/.test(s.body))));
+  ok('二次発酵：ひと回り〜1.5倍弱・35〜50分', r.variants.every((v) => { const f = v.steps.find((s) => s.phase === 'proof').ferment; return f.min === 35 && f.max === 50 && /1\.5倍弱/.test(f.cue); }));
+  ok('本文のテンプレートがすべて埋まり、使う材料はすべて材料にある', r.variants.every((v) => { const a2 = amt(v); return v.steps.every((s) => !/\{\{/.test(C.tpl(s.body, a2)) && (s.uses || []).every((u) => a2.rows[typeof u === 'string' ? u : u.ref])); }));
+  ok('バタールの分割は「分割せず1個にまとめる」', /分割せず1個/.test(C.tpl(r.variants[1].steps.find((s) => s.phase === 'divide').body, amt(r.variants[1]))));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
