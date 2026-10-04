@@ -409,6 +409,13 @@ export function hbCapacityWarning(v, flour) {
   return `HB${cap.course ? `「${cap.course}」` : ''}コースの基準容量（粉${cap.flourMax}g）を超えます（現在 粉${Math.round(flour)}g）`;
 }
 
+/** グリル皿1枚に並ぶ個数を超えるとき（NE-BS655 はグリル皿が1枚）。止めずに注意だけ出す */
+export function trayWarning(v, count) {
+  const max = +v?.trayMax;
+  if (!(max > 0) || !(count > max)) return null;
+  return `グリル皿1枚に並ぶのは約${max}個までです（現在 ${Math.round(count)}個）。2回に分けて焼く場合は、2回目の分を冷蔵庫に入れて二次発酵を遅らせ、1回目が焼き上がってから発酵させてください`;
+}
+
 /* ───────────── editing safety ───────────── */
 
 /** After editing: an ingredient whose name really changed loses its ingKey (falls back to the name). */
@@ -961,8 +968,12 @@ export function planBatch(members, { leadIndex = 0, planId = null } = {}) {
   });
   const steps = [...perMember('prep'), ...shared('dough'), ...divide, ...perMember('shape'), ...proof, ...perMember('top'), ...bake, ...perMember('after')];
   const title = allocation.map((a) => `${a.recipeName}${a.count}`).join('・');
+  // 止めない注意：グリル皿1枚に並ぶ個数（メンバーのうち一番少ない値）を超える
+  const trays = list.map((m) => +m.v.trayMax).filter((x) => x > 0);
+  const warnings = [];
+  if (trays.length) { const w = trayWarning({ trayMax: Math.min(...trays) }, total); if (w) warnings.push(w); }
   return {
-    ok: true, errors: [],
+    ok: true, errors: [], warnings,
     title, total, planId,
     lead: { index: leadIdx, recipeId: lead.recipe?.id, recipeName: memberName(lead), variantId: lead.v.id, variantName: lead.v.name, hb: lead.v.hb ? cloneJ(lead.v.hb) : null },
     familyId: lead.v.dough?.familyId || null, signature: doughSignature(lead.v),

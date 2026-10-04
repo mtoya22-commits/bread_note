@@ -236,6 +236,7 @@ body.making #tabs, body.making #timerbar { display: none; }
 .sm-i .v.diff { color: var(--accent); font-size: 13px; letter-spacing: -1px; }
 .sm-i .v.diff span { color: var(--line); }
 .sum-line { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 0; }
+.sum-line .badge { white-space: normal; max-width: 100%; border-radius: 10px; }
 
 .scale-card { margin-top: 12px; }
 .scale-h { display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: 8px; }

@@ -2,7 +2,7 @@ import * as db from './db.js';
 import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited, DOUGH_FAMILIES, applyStepMeta } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '2.0.4';
+export const APP_VERSION = '2.1.1';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -381,6 +381,7 @@ function vRecipe(id) {
     ${pb ? `<div class="plan-h">発酵の計画 <span class="muted small">作り始めに選びます</span></div><div class="seg plan">${pb.options.map((o) => `<button class="${o.id === plan ? 'on' : ''}" data-act="plan" data-r="${r.id}" data-p="${o.id}">${o.icon || ''} ${esc(o.label)}</button>`).join('')}</div>` : ''}
     ${scalePanel(r, v, sc)}
     ${(() => { const w = C.hbCapacityWarning(v, sc.flour); return w ? `<div class="card warn cap-warn">⚠️ ${esc(w)}</div>` : ''; })()}
+    ${(() => { const w = C.trayWarning(v, amt.count); return w ? `<div class="card warn cap-warn">⚠️ ${esc(w)}</div>` : ''; })()}
     ${doughCard(r, v)}
 
     <div class="tabs3">
@@ -653,7 +654,8 @@ function vBatchNew() {
     ${members.length ? `<div class="sec-h"><h2>生地の作り方</h2><span class="muted small">共通の生地はこのレシピの工程で作ります</span></div>${leadSeg}` : ''}
     ${sum}
     ${p.ok ? '' : `<div class="card warn">${p.errors.map((e) => `⚠️ ${esc(e)}`).join('<br>')}</div>`}
-    <div class="muted small">「同じ生地で同時に作れる」組み合わせだけ選べます。天板・オーブンに一度に入るかは判定していません。</div>
+    ${p.ok && p.warnings?.length ? `<div class="card warn cap-warn">${p.warnings.map((e) => `⚠️ ${esc(e)}`).join('<br>')}</div>` : ''}
+    <div class="muted small">「同じ生地で同時に作れる」組み合わせだけ選べます。グリル皿に並ぶ個数は目安として注意を出します（2回に分ける段取りまでは自動では作りません）。</div>
   </div>
   <div class="startbar">
     <button class="btn primary big" data-act="batch-start" ${p.ok ? '' : 'disabled'}>${ICON.fire}まとめて作り始める</button>

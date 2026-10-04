@@ -12,6 +12,14 @@ export const DOUGH_FAMILIES = {
   'french-soft': { name: 'フランスパン生地（外パリ中ふわ）' },
 };
 
+// オーブン：Panasonic ビストロ NE-BS655（取扱説明書より）
+//  ・手動「オーブン」は80〜250℃。220℃以上は設定温度で約5分、その後は自動で210℃に下がる
+//  ・予熱は庫内を空にして行う（グリル皿も入れない）。予熱時間の目安：190℃ 約12分／200℃ 約13分／210℃ 約14分／250℃ 約24分
+//  ・手動「オーブン」ではスチームが出ない → ハード系は入れる前に生地の表面に霧吹き
+//  ・手動「発酵」は35℃か40℃（給水タンクの水でスチームが出る。タンクが空ならスチームなし）
+//  ・グリル皿は1枚（約33×34cm）。パンは下段。庫内が110℃以上だと220℃以上に設定できない
+export const OVEN = { name: 'ビストロ NE-BS655', tray: '約33×34cm' };
+
 // ingredient helper: g = number | {target,min,max}
 const I = (id, name, g, o = {}) => ({ id, name, g, ...o });
 
@@ -54,11 +62,14 @@ function recipe(r) {
 }
 
 // 2段焼成は焼成工程を2つ持つ（1段目の時間は温度を切り替える時刻なので、同時製作の判定にも使う）
+// NE-BS655：250℃は約5分で自動的に210℃に下がる。手動オーブンはスチームが出ないので霧吹き
 const RODEV_BAKE = (p) => [
-  { id: `${p}-bake1`, phase: 'bake', title: '焼成①', body: '250℃・スチームあり。', timer: { min: 10, label: '焼成① 250℃' },
-    bake: { method: 'oven', preheat: 250, temp: 250, min: 10, max: 10, steam: true } },
-  { id: `${p}-bake2`, phase: 'bake', title: '焼成②', body: '蒸気を抜き、230℃に下げて焼く。焼き色を見て15〜18分。', timer: { min: 15, max: 18, label: '焼成② 230℃' },
-    bake: { method: 'oven', temp: 230, min: 15, max: 18, steam: false } },
+  { id: `${p}-bake1`, phase: 'bake', title: '焼成①', body: '生地の表面にたっぷり霧吹きし、クープを入れる（入れる場合）。予熱完了後（250℃）、グリル皿を下段に入れ、合計25〜28分に設定してスタート。最初の約5分は250℃。',
+    timer: { min: 5, label: '焼成① 250℃' },
+    bake: { method: 'oven', preheat: 250, temp: 250, min: 5, max: 5, steam: false, mist: true },
+    tips: ['手動「オーブン」ではスチームが出ないので、霧吹きで代わりにする（庫内やドアのガラスには吹きかけない）'] },
+  { id: `${p}-bake2`, phase: 'bake', title: '焼成②', body: '自動で210℃に下がる（操作は不要）。焼き色を見て20〜23分。', timer: { min: 20, max: 23, label: '焼成② 210℃' },
+    bake: { method: 'oven', temp: 210, min: 20, max: 23, steam: false } },
   { id: `${p}-cool`, phase: 'after', title: '冷ます', body: '網の上で完全に冷ます。断面は冷めてから。' },
 ];
 
@@ -99,7 +110,8 @@ const EGGWASH = () => ({ id: 'eggwash', name: '艶出し用の溶き卵', text: 
 const SWEET_BASE = () => ({
   scaleMode: 'count', baseCount: 8, countUnit: '個', baseFlour: 200, yieldLabel: '8個分',
   dough: { familyId: 'basic-sweet-dough' },
-  bakeSummary: '190℃予熱 → 180℃ 12〜15分',
+  bakeSummary: '190℃予熱 → 180℃ 12〜15分（下段）',
+  trayMax: 9,   // グリル皿1枚に並ぶ目安（説明書のバターロールも9個）
 });
 const SWEET_HB = () => ({
   mode: 'knead_first_fermentation', recommendation: 'recommended', model: 'siroca SB-2D271', course: 'パン生地コース',
@@ -115,15 +127,18 @@ const HB_DOUGH = (p, n0) => ([
   { id: `${p}${n0 + 1}`, phase: 'dough', title: 'バターを加える', uses: ['butter'],
     body: '生地がある程度つながってからバターを加える。投入タイミングは機種の指示に従う。' },
   { id: `${p}${n0 + 2}`, phase: 'dough', title: '一次発酵の仕上がりを確認',
-    body: 'パン生地コース終了。約2倍がめやす。足りなければ28〜30℃で10〜20分追加する。' },
+    body: 'パン生地コース終了。約2倍がめやす。足りなければビストロの手動「発酵」35℃で10〜15分追加する。' },
 ]);
 const SWEET_DIVIDE = (p) => ({ id: `${p}-div`, phase: 'divide', title: '分割・ベンチ', body: '{{count}}分割。1個約{{piece}}g。軽く丸めて休ませる。',
   timer: { min: 15, label: 'ベンチタイム' } });
-const SWEET_PROOF = (p) => ({ id: `${p}-ferm2`, phase: 'proof', title: '二次発酵', body: '時間より生地の状態を優先する。',
-  ferment: { temp: '32〜35℃', tempMode: 'range', tempMin: 32, tempMax: 35, cue: 'ひと回りふっくら・指で軽く触ると柔らかい', min: 40, max: 60 },
-  tips: ['過発酵になると焼成時に横へ広がりやすい', '終盤に190℃で予熱を開始'] });
+// NE-BS655：グリル皿ごと下段に入れて手動「発酵」35℃（給水タンク満水でスチーム → ラップ・霧吹き不要）。
+// 予熱は庫内を空にする必要があるので、予熱の約12分のあいだも膨らむ分を見込んで早めに取り出す
+const SWEET_PROOF = (p) => ({ id: `${p}-ferm2`, phase: 'proof', title: '二次発酵',
+  body: 'グリル皿に並べて下段に入れ、手動「発酵」35℃（給水タンクは満水。ラップ・霧吹きは不要）。予熱の間にも膨らむので、ひと回り弱で取り出す。時間より生地の状態を優先する。',
+  ferment: { temp: '35℃（ビストロの発酵）', tempMode: 'range', tempMin: 35, tempMax: 35, cue: 'ひと回り弱（取り出したあと予熱の約12分でひと回りふっくらに）', min: 30, max: 45 },
+  tips: ['取り出したらすぐ、庫内を空にして190℃で予熱を始める（約12分）', '過発酵になると焼成時に横へ広がりやすい'] });
 const SWEET_BAKE = (p, extraTips = []) => ({ id: `${p}-bake`, phase: 'bake', title: '焼成',
-  body: '190℃で予熱 → 180℃で焼く。12分で焼き色を確認し、濃いきつね色になれば焼き上がり。弱ければ1〜2分追加。',
+  body: '予熱完了後（190℃）、グリル皿をすばやく下段に入れ、温度変更で180℃にして焼く。12分で焼き色を確認し、濃いきつね色になれば焼き上がり。弱ければ1〜2分追加。',
   timer: { min: 12, max: 15, label: '焼成 180℃' },
   bake: { method: 'oven', preheat: 190, temp: 180, min: 12, max: 15, steam: false, vessel: 'tray' },
   ...(extraTips.length ? { tips: extraTips } : {}) });
@@ -147,7 +162,7 @@ const ANPAN_AFTER = (p) => ([
     tips: ['閉じ目付近にあんこを付けない', '平たく整えると焼成中に転がりにくく、底も浮きにくい'] },
   SWEET_PROOF(p),
   { id: `${p}-glaze`, phase: 'top', title: '艶出し・黒ごま', uses: ['eggwash', 'sesame'],
-    body: '表面に溶き卵を薄く塗り、中央に黒ごまを少量のせる。',
+    body: '予熱の間に、表面に溶き卵を薄く塗り、中央に黒ごまを少量のせる。',
     tips: [...GLAZE_TIPS, '黒ごまは、ほかの菓子パンと同じ天板で焼くときの目印にもなる'] },
   SWEET_BAKE(p),
   SWEET_COOL(p),
@@ -205,18 +220,20 @@ const FR_DOUGH = (p) => ([
     tips: ['発酵が遅いと感じたら、次回はイーストを1.2gに'] },
   { id: `${p}5`, phase: 'divide', title: '分割・ベンチ', body: '{{divide}}。軽く丸め、乾燥しないよう覆う。', timer: { min: 20, label: 'ベンチタイム' } },
 ]);
-const FR_PROOF = (p) => ({ id: `${p}7`, phase: 'proof', title: '二次発酵', body: '綴じ目を下に置く。発酵が足りないと中が詰まって硬く感じる。',
+// 二次発酵は室温（ビストロの発酵は35℃からなので使わない）。オーブンが空いているので、発酵中に250℃予熱（約24分）を進める
+const FR_PROOF = (p) => ({ id: `${p}7`, phase: 'proof', title: '二次発酵', body: 'クッキングシートを敷いたグリル皿に、綴じ目を下にして並べる。室温（25℃前後）で発酵させる。発酵が足りないと中が詰まって硬く感じる。',
   ferment: { temp: '25℃', tempMode: 'range', tempMin: 25, tempMax: 25, cue: 'ひと回り〜1.5倍弱にふっくら', min: 35, max: 50 },
-  tips: ['終盤にオーブンを250℃で予熱する（天板も入れて温める）', '蒸気を使う場合は予熱時から金属皿も入れて温める'] });
+  tips: ['二次発酵を始めて10〜20分たったら、庫内を空にして250℃で予熱を始める（約24分。予熱完了後も約50分は保たれる）', '直前にオーブンを使って庫内が110℃以上だと250℃に設定できないので注意'] });
 const FR_COOL = (p, body = '網の上で冷ます。温かいうちは袋に入れない（皮が柔らかくなる）。') => ({ id: `${p}-cool`, phase: 'after', title: '冷ます', body });
-const FR_STEAM_TIP = '蒸気はオーブンの取扱説明書を確認。使う場合は予熱で温めた金属皿に熱湯30〜50mlを注ぐ（蒸気でのやけどに注意）';
+const FR_STEAM_TIP = 'ビストロの手動「オーブン」ではスチームが出ないので、入れる直前に生地の表面へたっぷり霧吹きする（庫内やドアのガラスには吹きかけない）';
+const FR_OVEN_TIP = 'ビストロは220℃以上だと約5分で自動的に210℃に下がる。設定は「予熱あり250℃」で合計時間を合わせれば、温度の切り替え操作はいらない';
 
 export function buildSeedRecipes() {
   return [
     // ───────────────────────────── カレーパン（rev3：A ベーキングパウダー／B イースト の2通り）
     recipe({
       id: 'curry-pan',
-      seedRev: 3, // rev3：衣を「薄い衣＋中目パン粉」に、揚げ方を2本ずつに。B（イースト）を追加
+      seedRev: 4, // rev3：衣を「薄い衣＋中目パン粉」に、揚げ方を2本ずつに。B（イースト）を追加。rev4：B の発酵を NE-BS655 の発酵機能に
       name: '薄皮もちもち俵型カレーパン',
       category: '惣菜パン',
       difficulty: 2,
@@ -328,8 +345,8 @@ export function buildSeedRecipes() {
             body: '柔らかくしたバターを加え、さらにこねる。薄く伸ばすと少し透ける程度でよい。こね上がりの生地温は26〜28℃が目安。',
             timer: { min: 8, max: 10, label: '本ごね' },
             tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
-          { id: 'y5', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
-            ferment: { temp: '30℃', tempMode: 'range', tempMin: 30, tempMax: 30, cue: '約2倍', min: 40, max: 50 } },
+          { id: 'y5', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ入れ、ラップなしでグリル皿にのせて下段へ。手動「発酵」35℃（給水タンクは満水）。時間より膨らみを優先する。',
+            ferment: { temp: '35℃（ビストロの発酵）', tempMode: 'range', tempMin: 35, tempMax: 35, cue: '約2倍', min: 35, max: 45 } },
           { id: 'y6', phase: 'divide', title: '分割・ベンチ', body: '{{count}}等分。1個約{{piece}}g。軽く丸めて休ませる。',
             timer: { min: 15, label: 'ベンチタイム' } },
           { id: 'y7', phase: 'shape', title: '包む', uses: ['curry'],
@@ -339,8 +356,8 @@ export function buildSeedRecipes() {
           { id: 'y8', phase: 'shape', title: '衣・パン粉', uses: ['bflour', 'bwater', 'panko'],
             body: '薄力粉と水を混ぜた薄い衣を表面に塗り、中目パン粉を付ける。閉じ目は特にしっかり密着させる。',
             tips: ['衣を付けてから二次発酵させる'] },
-          { id: 'y9', phase: 'proof', title: '二次発酵', body: '湿度は上げない（パン粉が湿るため）。発酵させすぎると揚げたときに破裂しやすく、油も吸うので控えめに。',
-            ferment: { temp: '30〜35℃', tempMode: 'range', tempMin: 30, tempMax: 35, cue: 'ひと回り大きくなる（膨らませすぎない）', min: 20, max: 25 } },
+          { id: 'y9', phase: 'proof', title: '二次発酵', body: 'グリル皿に並べて下段に入れ、手動「発酵」35℃。給水タンクは空にしてスチームを出さない（パン粉が湿るため）。発酵させすぎると揚げたときに破裂しやすく、油も吸うので控えめに。',
+            ferment: { temp: '35℃（ビストロの発酵・スチームなし）', tempMode: 'range', tempMin: 35, tempMax: 35, cue: 'ひと回り大きくなる（膨らませすぎない）', min: 20, max: 25 } },
           { id: 'y10', phase: 'bake', title: '揚げる', uses: ['fryoil'],
             bake: { method: 'fry', tempMin: 170, tempMax: 170, min: 4, max: 4, steam: false },
             body: '170℃。一度に2本ずつ、閉じ目を下にして入れ、途中で返しながら揚げる。全体がきつね色になったら取り出し、網の上に立てかけて油を切る。',
@@ -348,14 +365,14 @@ export function buildSeedRecipes() {
             timer: { min: 4, label: '揚げ' } },
         ],
         tips: ['イースト発酵で、もっちり＋ふんわり・パンらしい香り', 'カレーは前日に作り、固く冷たくする', 'こね上がり生地温 26〜28℃が目安', '衣を付けてから二次発酵。膨らませすぎない', '揚げるのは2本ずつ。網に立てかけて油を切る',
-          '冷凍する場合：揚げてから冷凍し、凍ったまま200℃のオーブンかトースターで8〜10分温め直す'],
+          '冷凍する場合：揚げてから冷凍し、凍ったまま手動「オーブン」予熱あり200℃で8〜10分温め直す'],
       }],
     }),
 
     // ───────────────────────────── ロデヴ（確定版）
     recipe({
       id: 'rodev-90',
-      seedRev: 3, // 標準版の改訂番号。上げると未編集の端末は自動更新、編集済みの端末には更新の提案が出る
+      seedRev: 4, // 標準版の改訂番号。上げると未編集の端末は自動更新、編集済みの端末には更新の提案が出る（rev4：NE-BS655 向けの焼成）
       name: '高加水90%ロデヴ',
       category: '高加水',
       difficulty: 3,
@@ -366,7 +383,7 @@ export function buildSeedRecipes() {
         scaleMode: 'flour', baseFlour: 250, baseCount: 2, countUnit: '個',
         yieldLabel: '2個分',
         hb: { mode: 'none', recommendation: 'not_recommended', model: '', course: '', notes: ['HB非推奨', '使用する場合は初期混合5分のみ'] },
-        bakeSummary: '250℃スチーム 10分 → 230℃ 15〜18分',
+        bakeSummary: '250℃予熱 → 霧吹き → 250℃ 約5分 → 自動で210℃ 20〜23分',
         dough: { familyId: 'lean-high-hydration' },
         ingredientGroups: [
           { id: 'flour', name: '粉', kind: 'flour', items: [
@@ -399,7 +416,7 @@ export function buildSeedRecipes() {
                 { id: 'td-div', phase: 'divide', title: '分割', body: '打ち粉をした台に出し、{{divide}}。成形はせず、形を軽く整える。' },
                 { id: 'td-ferm2', phase: 'proof', title: '最終発酵', body: '布どり等で休ませる。時間より生地の状態を優先する。',
                   ferment: { temp: '室温', tempMode: 'ambient', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 90 },
-                  tips: ['終盤にオーブンを250℃で予熱（スチームの準備も）'] },
+                  tips: ['残り約25分になったら、庫内を空にして250℃で予熱を始める（予熱 約24分）', '直前にオーブンを使って庫内が110℃以上だと250℃に設定できないので注意'] },
                 ...RODEV_BAKE('td'),
               ] },
               { id: 'cold', label: '冷蔵発酵', icon: '❄️', sub: 'イースト0.2%・冷蔵4〜5℃で8〜15時間 → 翌日焼成', steps: [
@@ -407,7 +424,7 @@ export function buildSeedRecipes() {
                 { id: 'cd-div', phase: 'divide', title: '取り出し・分割', body: '冷蔵庫から出し、{{divide}}。成形はせず、形を軽く整える。' },
                 { id: 'cd-ferm2', phase: 'proof', title: '復温・最終発酵', body: '布どり等で休ませ、復温を兼ねて最終発酵させる。時間より生地の状態を優先する。',
                   ferment: { temp: '室温', tempMode: 'ambient', cue: 'ひと回り膨らみ、内部にガスが保たれている', min: 40, max: 90 },
-                  tips: ['終盤にオーブンを250℃で予熱（スチームの準備も）'] },
+                  tips: ['残り約25分になったら、庫内を空にして250℃で予熱を始める（予熱 約24分）', '直前にオーブンを使って庫内が110℃以上だと250℃に設定できないので注意'] },
                 ...RODEV_BAKE('cd'),
               ] },
             ] },
@@ -425,7 +442,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── あんぱん（rev2：黒ごま標準・共通生地の部品化）
     recipe({
       id: 'anpan',
-      seedRev: 2,
+      seedRev: 3, // rev3：NE-BS655（発酵機能35℃・予熱は庫内を空に）
       name: '基本のあんぱん',
       category: '菓子パン',
       difficulty: 2,
@@ -461,8 +478,9 @@ export function buildSeedRecipes() {
               timer: { min: 8, max: 15, label: '本ごね' } },
             { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳の温度を下げる'] },
-            { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
-              ferment: { temp: '28〜30℃', tempMode: 'range', tempMin: 28, tempMax: 30, cue: '約2倍', min: 60, max: 90 } },
+            { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ入れ、ラップなしでグリル皿にのせて下段へ。手動「発酵」35℃（給水タンクは満水）。時間より膨らみを優先する。',
+              ferment: { temp: '35℃（ビストロの発酵）', tempMode: 'range', tempMin: 35, tempMax: 35, cue: '約2倍・粉を付けた指で押した穴がそのまま残る', min: 40, max: 60 },
+              tips: ['こね上げ温度が高いと発酵が速い。時間より膨らみで判断する'] },
             ...ANPAN_AFTER('h'),
           ],
           tips: [
@@ -478,7 +496,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── クリームパン
     recipe({
       id: 'cream-pan',
-      seedRev: 1,
+      seedRev: 2, // rev2：NE-BS655
       name: '基本のクリームパン',
       category: '菓子パン',
       difficulty: 3,
@@ -510,7 +528,7 @@ export function buildSeedRecipes() {
             body: '生地を楕円形に伸ばす（中央はやや厚く、縁は少し薄め）。冷えたカスタード{{per:custard}}を置いて半月形に二つ折りにし、縁をしっかり閉じる。丸い側から4〜5本の切り込みを入れてグローブ型にする。',
             tips: ['閉じ目にカスタードを付けない', '切り込みはカスタードまで届かせない', '冷やしたカスタードは練り直しすぎない（へらで軽くほぐす程度）'] },
           SWEET_PROOF('cp'),
-          { id: 'cp-glaze', phase: 'top', title: '艶出し', uses: ['eggwash'], body: '表面に溶き卵を薄く塗る。', tips: GLAZE_TIPS },
+          { id: 'cp-glaze', phase: 'top', title: '艶出し', uses: ['eggwash'], body: '予熱の間に、表面に溶き卵を薄く塗る。', tips: GLAZE_TIPS },
           SWEET_BAKE('cp', ['12分で切り込み部分の焼き色を確認']),
           SWEET_COOL('cp', '網にのせて冷ます。カスタード入りは当日中に食べるのが基本。残りは冷蔵保存。'),
         ],
@@ -532,7 +550,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── チョコ包みパン
     recipe({
       id: 'choco-pan',
-      seedRev: 1,
+      seedRev: 2, // rev2：NE-BS655
       name: '基本のチョコ包みパン',
       category: '菓子パン',
       difficulty: 2,
@@ -559,7 +577,7 @@ export function buildSeedRecipes() {
             body: '生地を円形に伸ばす（中央はやや厚く、周囲は少し薄め）。中央にチョコを置き、周囲の生地を集めてしっかり閉じる。閉じ目を下にして丸く整え、手のひらでごく軽く押さえて安定させる。',
             tips: ['チョコを閉じ目に挟まない'] },
           SWEET_PROOF('ch'),
-          { id: 'ch-glaze', phase: 'top', title: '艶出し', uses: ['eggwash'], body: '表面に溶き卵を薄く塗る。トッピングはしない（プレーンの丸型）。', tips: GLAZE_TIPS },
+          { id: 'ch-glaze', phase: 'top', title: '艶出し', uses: ['eggwash'], body: '予熱の間に、表面に溶き卵を薄く塗る。トッピングはしない（プレーンの丸型）。', tips: GLAZE_TIPS },
           SWEET_BAKE('ch'),
           SWEET_COOL('ch', '網にのせて冷ます。焼きたては中のチョコが熱いので少し冷ましてから。'),
         ],
@@ -579,12 +597,12 @@ export function buildSeedRecipes() {
     // ───────────────────────────── 食パン（2 variants）
     recipe({
       id: 'shokupan-junnama',
-      seedRev: 3,
+      seedRev: 5, // rev4：NE-BS655（200℃で焼く・発酵機能35℃）。rev5：D（湯種）を追加
       name: 'ふわもち純生食パン',
       category: '食パン',
       difficulty: 2,
       tags: ['当日完成', '手ごね'],
-      description: 'しっとりふわもち。HB全自動、HB＋12cm角型、手ごね＋12cm角型の3通り。BとCは配合が同じなので、こね方の違いを記録で比べられる。',
+      description: 'しっとりふわもち。HB全自動、HB＋12cm角型、手ごね＋12cm角型、湯種＋HB＋12cm角型の4通り。BとCは配合が同じなので、こね方の違いを記録で比べられる。Dは前日に湯種を仕込み、自然な甘みともっちり感を強める。',
       variants: [
         {
           id: 'hb-auto', name: 'A. HB全自動',
@@ -626,7 +644,7 @@ export function buildSeedRecipes() {
           yieldLabel: '12cm角型 1本',
           equipment: ['蓋付き12cm角型'],
           hb: { mode: 'knead_first_fermentation', recommendation: 'recommended', model: 'siroca SB-2D271', course: 'パン生地コース', notes: ['こね〜一次発酵までHB'] },
-          bakeSummary: '210℃予熱 → 195℃ 30〜33分',
+          bakeSummary: '210℃予熱 → 200℃ 28〜31分（下段）',
           timeLabel: '約2.5〜3.5時間',
           dough: { familyId: 'rich-shokupan' },
           ingredientGroups: PAN12_GROUPS(),
@@ -637,11 +655,11 @@ export function buildSeedRecipes() {
               hb: 'siroca SB-2D271：パン生地コース（こね〜一次発酵）' },
             { id: 'b2', phase: 'divide', title: '分割・ベンチ', body: '2分割して軽く丸め、休ませる。', timer: { min: 15, label: 'ベンチタイム' } },
             { id: 'b3', phase: 'shape', title: '成形', body: '縦長に伸ばす。左右を中央へ折り、軽く伸ばして上から巻く。同じものを2本作り、巻き終わりを下にして型へ入れる。' },
-            { id: 'b4', phase: 'proof', title: '二次発酵', body: '時間固定ではなく高さを優先して判定する。',
-              ferment: { temp: '32〜35℃', tempMode: 'range', tempMin: 32, tempMax: 35, cue: '生地頂点が型の縁より約1cm下 → 蓋をする' },
-              tips: ['終盤に210℃で予熱を開始', '初回は「型の縁より約1cm下」で蓋をする'] },
-            { id: 'b5', phase: 'bake', title: '焼成', body: '210℃で予熱 → 195℃で焼く。焼き不足なら2〜3分追加。', timer: { min: 30, max: 33, label: '焼成 195℃' },
-              bake: { method: 'oven', preheat: 210, temp: 195, min: 30, max: 33, steam: false, vessel: 'pan' } },
+            { id: 'b4', phase: 'proof', title: '二次発酵', body: '型ごとグリル皿にのせて下段に入れ、手動「発酵」35℃（給水タンクは満水）。時間固定ではなく高さで判定する。予熱の間にも膨らむので、早めに取り出す。',
+              ferment: { temp: '35℃（ビストロの発酵）', tempMode: 'range', tempMin: 35, tempMax: 35, cue: '生地頂点が型の縁より約2cm下で取り出す → 予熱の間に約1cm下まで → 蓋をする' },
+              tips: ['取り出したらすぐ、庫内を空にして210℃で予熱を始める（約14分）', '初回は「型の縁より約1cm下」で蓋をする'] },
+            { id: 'b5', phase: 'bake', title: '焼成', body: '予熱完了後（210℃）、型をグリル皿にのせて下段に入れ、温度変更で200℃にして焼く。焼き不足なら2〜3分追加。', timer: { min: 28, max: 31, label: '焼成 200℃' },
+              bake: { method: 'oven', preheat: 210, temp: 200, min: 28, max: 31, steam: false, vessel: 'pan' } },
             { id: 'b6', phase: 'after', title: '焼成後', uses: ['mbutter'], body: '型に軽くショックを与え、すぐ型から取り出す。好みで表面に溶かしバターを薄く塗る。' },
             { id: 'b7', phase: 'after', title: '冷却', body: '粗熱を取り、まだ少し温かい段階で袋へ。' },
           ],
@@ -662,7 +680,7 @@ export function buildSeedRecipes() {
           yieldLabel: '12cm角型 1本',
           equipment: ['蓋付き12cm角型'],
           hb: { mode: 'none', label: '手ごね', recommendation: 'not_recommended', model: '', course: '', notes: ['手ごね（HBは使わない）'] },
-          bakeSummary: '210℃予熱 → 195℃ 30〜33分',
+          bakeSummary: '210℃予熱 → 200℃ 28〜31分（下段）',
           timeLabel: '約3〜4時間',
           dough: { familyId: 'rich-shokupan' },
           ingredientGroups: PAN12_GROUPS(),
@@ -682,15 +700,15 @@ export function buildSeedRecipes() {
               timer: { min: 8, max: 15, label: '本ごね' } },
             { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳などの液温を下げる'] },
-            { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ。時間より膨らみを優先する。',
-              ferment: { temp: '28〜30℃', tempMode: 'range', tempMin: 28, tempMax: 30, cue: '約2倍', min: 60, max: 90 } },
+            { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ入れ、ラップなしでグリル皿にのせて下段へ。手動「発酵」35℃（給水タンクは満水）。時間より膨らみを優先する。',
+              ferment: { temp: '35℃（ビストロの発酵）', tempMode: 'range', tempMin: 35, tempMax: 35, cue: '約2倍・粉を付けた指で押した穴がそのまま残る', min: 45, max: 70 } },
             { id: 'h8', phase: 'divide', title: '分割・ベンチ', body: '2分割して軽く丸め、休ませる。', timer: { min: 15, label: 'ベンチタイム' } },
             { id: 'h9', phase: 'shape', title: '成形', body: '縦長に伸ばす。左右を中央へ折り、軽く伸ばして上から巻く。同じものを2本作り、巻き終わりを下にして型へ入れる。' },
-            { id: 'h10', phase: 'proof', title: '二次発酵', body: '時間固定ではなく高さを優先して判定する。',
-              ferment: { temp: '32〜35℃', tempMode: 'range', tempMin: 32, tempMax: 35, cue: '生地頂点が型の縁より約1cm下 → 蓋をする', min: 45, max: 75 },
-              tips: ['終盤に210℃で予熱を開始', '初回は「型の縁より約1cm下」で蓋をする'] },
-            { id: 'h11', phase: 'bake', title: '焼成', body: '210℃で予熱 → 195℃で焼く。焼き不足なら2〜3分追加。', timer: { min: 30, max: 33, label: '焼成 195℃' },
-              bake: { method: 'oven', preheat: 210, temp: 195, min: 30, max: 33, steam: false, vessel: 'pan' } },
+            { id: 'h10', phase: 'proof', title: '二次発酵', body: '型ごとグリル皿にのせて下段に入れ、手動「発酵」35℃（給水タンクは満水）。時間固定ではなく高さで判定する。予熱の間にも膨らむので、早めに取り出す。',
+              ferment: { temp: '35℃（ビストロの発酵）', tempMode: 'range', tempMin: 35, tempMax: 35, cue: '生地頂点が型の縁より約2cm下で取り出す → 予熱の間に約1cm下まで → 蓋をする', min: 35, max: 60 },
+              tips: ['取り出したらすぐ、庫内を空にして210℃で予熱を始める（約14分）', '初回は「型の縁より約1cm下」で蓋をする'] },
+            { id: 'h11', phase: 'bake', title: '焼成', body: '予熱完了後（210℃）、型をグリル皿にのせて下段に入れ、温度変更で200℃にして焼く。焼き不足なら2〜3分追加。', timer: { min: 28, max: 31, label: '焼成 200℃' },
+              bake: { method: 'oven', preheat: 210, temp: 200, min: 28, max: 31, steam: false, vessel: 'pan' } },
             { id: 'h12', phase: 'after', title: '焼成後', uses: ['mbutter'], body: '型に軽くショックを与え、すぐ型から取り出す。好みで表面に溶かしバターを薄く塗る。' },
             { id: 'h13', phase: 'after', title: '冷却', body: '粗熱を取り、まだ少し温かい段階で袋へ。' },
           ],
@@ -703,13 +721,70 @@ export function buildSeedRecipes() {
             '有塩バター使用時は塩を0.5g減らす',
           ],
         },
+        {
+          id: 'yudane-pan12', name: 'D. 湯種＋HB＋12cm角型',
+          scaleMode: 'panVolume', baseFlour: 250,
+          basePan: { name: '蓋付き12cm角型', w: 12, d: 12, h: 12 },
+          yieldLabel: '12cm角型 1本',
+          equipment: ['蓋付き12cm角型'],
+          hb: { mode: 'knead_first_fermentation', recommendation: 'recommended', model: 'siroca SB-2D271', course: 'パン生地コース', notes: ['こね〜一次発酵までHB', '湯種は小さくちぎって、ほかの材料と一緒に入れる'] },
+          bakeSummary: '210℃予熱 → 200℃ 29〜32分（下段）',
+          timeLabel: '前日 約10分＋当日 約3〜3.5時間',
+          dough: { familyId: 'rich-shokupan' },
+          ingredientGroups: [
+            // 湯種の粉も粉の合計（250g）に入る。熱湯は「その他」に置く
+            { id: 'yudane', name: '湯種（前日）', kind: 'flour', items: [I('yflour', '春よ恋（湯種用）', 50, { note: '粉全体の20%' })] },
+            { id: 'flour', name: '粉（当日）', kind: 'flour', items: [I('haru', '春よ恋', 168.75), I('kitano', 'キタノカオリ', 31.25)] },
+            { id: 'dough', name: 'その他', kind: 'dough', items: [
+              I('ywater', '熱湯（湯種用・前日）', 50, { moisture: 1, note: '沸騰したての湯' }),
+              I('milk', '牛乳', { target: 125, min: 120, max: 130 }, { moisture: 0.88, note: 'まず120g、硬ければ130gまで（水は入れない）' }),
+              I('cream', '生クリーム', 22.321428571, { moisture: 0.5 }),
+              I('sugar', '砂糖', 17.857142857),
+              I('honey', 'はちみつ', 13.392857143, { moisture: 0.2 }),
+              I('salt', '塩', 4.017857143, { precision: 0.1 }),
+              I('butter', '無塩バター', 25),
+              I('yeast', 'ドライイースト', 2.678571429, { precision: 0.1 }),
+            ] },
+            { id: 'finish', name: '仕上げ', kind: 'finish', items: [{ id: 'mbutter', name: '溶かしバター（好みで）', text: '2〜3g' }] },
+          ],
+          steps: [
+            { id: 'd0', phase: 'prep', title: '湯種を作る（前日）', uses: ['yflour', 'ywater'],
+              body: '耐熱ボウルに湯種用の春よ恋を入れ、沸騰したての熱湯を一気に加える。へらで手早く混ぜ、粉気がなくなったらひとまとめにする。',
+              tips: ['湯がぬるいとでんぷんが糊状にならず、湯種の効果が出にくい', '熱いので素手で触らない'] },
+            { id: 'd1', phase: 'prep', title: '湯種を冷蔵庫で寝かせる', body: 'ラップを表面に密着させて包み、粗熱が取れたら冷蔵庫で8〜24時間寝かせる。',
+              timer: { min: 480, max: 1440, label: '湯種を寝かせる' },
+              tips: ['当日は冷蔵庫から出してすぐ使ってよい（冷たいぶん、こね上がりの温度が上がりすぎない）'] },
+            { id: 'd2', phase: 'dough', title: 'HBでこね〜一次発酵',
+              uses: ['haru', 'kitano', { ref: 'milk', show: 'min' }, 'cream', 'sugar', 'honey', 'salt', 'butter', 'yeast'],
+              body: '湯種を小さくちぎり、ほかの材料と一緒にHBへ入れる（塩とイーストが直接重ならないように）。牛乳はまず{{min:milk}}、硬ければ最大{{max:milk}}まで。パン生地コースを使用。一次発酵終了時の目安は約2倍。',
+              hb: 'siroca SB-2D271：パン生地コース（こね〜一次発酵）',
+              tips: ['湯種の生地は少しベタつくのが普通。打ち粉は増やさない'] },
+            { id: 'd3', phase: 'divide', title: '分割・ベンチ', body: '2分割して軽く丸め、休ませる。', timer: { min: 15, label: 'ベンチタイム' } },
+            { id: 'd4', phase: 'shape', title: '成形', body: '縦長に伸ばす。左右を中央へ折り、軽く伸ばして上から巻く。同じものを2本作り、巻き終わりを下にして型へ入れる。' },
+            { id: 'd5', phase: 'proof', title: '二次発酵', body: '型ごとグリル皿にのせて下段に入れ、手動「発酵」35℃（給水タンクは満水）。時間固定ではなく高さで判定する。予熱の間にも膨らむので、早めに取り出す。',
+              ferment: { temp: '35℃（ビストロの発酵）', tempMode: 'range', tempMin: 35, tempMax: 35, cue: '生地頂点が型の縁より約2cm下で取り出す → 予熱の間に約1cm下まで → 蓋をする' },
+              tips: ['取り出したらすぐ、庫内を空にして210℃で予熱を始める（約14分）', '湯種の生地はB・Cより膨らむのに少し時間がかかることがある'] },
+            { id: 'd6', phase: 'bake', title: '焼成', body: '予熱完了後（210℃）、型をグリル皿にのせて下段に入れ、温度変更で200℃にして焼く。焼き不足なら2〜3分追加。', timer: { min: 29, max: 32, label: '焼成 200℃' },
+              bake: { method: 'oven', preheat: 210, temp: 200, min: 29, max: 32, steam: false, vessel: 'pan' },
+              tips: ['水分が多い生地なので、B・Cより1〜2分長め', '型ごと軽く叩いて軽い音がすれば焼き上がり'] },
+            { id: 'd7', phase: 'after', title: '焼成後', uses: ['mbutter'], body: '型に軽くショックを与え、すぐ型から取り出す。好みで表面に溶かしバターを薄く塗る。' },
+            { id: 'd8', phase: 'after', title: '冷却', body: '粗熱を取り、まだ少し温かい段階で袋へ。' },
+          ],
+          tips: [
+            '粉の20%（春よ恋50g）を同量の熱湯で湯種にする。でんぷんが糊状になり、自然な甘み・もっちり・しっとり感が増え、翌日も柔らかい',
+            '湯種の水分があるので、水は入れず牛乳を減らす（B・Cの水 約22g・牛乳 約143g → 牛乳 120〜130g）',
+            '湯種の部分はグルテンが弱いので、ボリュームはB・Cより少し控えめになりやすい',
+            '手ごねにする場合は、Cの工程で最初に混ぜるときに湯種をちぎって加える',
+            '甘さの調整は、まず湯種だけで焼いて確認してから（塩・はちみつと同時に変えない）',
+          ],
+        },
       ],
     }),
 
     // ───────────────────────────── 外パリ中ふわフランスパン（4つの形）
     recipe({
       id: 'french-soft',
-      seedRev: 1,
+      seedRev: 2, // rev2：NE-BS655（250℃は約5分 → 自動で210℃、霧吹き、バゲット30cm）
       name: '外パリ中ふわフランスパン',
       category: 'ハード系',
       difficulty: 3,
@@ -718,61 +793,61 @@ export function buildSeedRecipes() {
       variants: [
         {
           id: 'baguette', name: 'バゲット', ...FR_BASE(2, '2本分', '本'),
-          bakeSummary: '250℃蒸気 7分 → 220℃ 10〜12分',
+          bakeSummary: '250℃予熱 → 霧吹き → 250℃ 約5分 → 自動で210℃ 13〜15分',
           ingredientGroups: FR_GROUPS(),
           steps: [
             ...FR_DOUGH('bg'),
-            { id: 'bg6', phase: 'shape', title: '成形', body: '軽く長方形に広げ、上下を中央へ折って巻き、綴じ目を閉じる。中央から外へ転がし、約30〜40cmに伸ばす（オーブンの天板に合わせる）。' },
+            { id: 'bg6', phase: 'shape', title: '成形', body: '軽く長方形に広げ、上下を中央へ折って巻き、綴じ目を閉じる。中央から外へ転がし、約28〜30cmに伸ばす（グリル皿 約33×34cmに2本並べるため30cmまで）。' },
             FR_PROOF('bg'),
             { id: 'bg8', phase: 'top', title: 'クープ', body: '斜めに3〜4本、刃を寝かせて浅めに入れる。' },
-            { id: 'bg-bake1', phase: 'bake', title: '焼成①', body: '250℃・蒸気あり。', timer: { min: 7, label: '焼成① 250℃' },
-              bake: { method: 'oven', preheat: 250, temp: 250, min: 7, max: 7, steam: true } },
-            { id: 'bg-bake2', phase: 'bake', title: '焼成②', body: '蒸気を止め、220℃に下げて焼く。濃い色まで焼かず、しっかりきつね色で止める。', timer: { min: 10, max: 12, label: '焼成② 220℃' },
-              bake: { method: 'oven', temp: 220, min: 10, max: 12, steam: false },
+            { id: 'bg-bake1', phase: 'bake', title: '焼成①', body: '生地の表面にたっぷり霧吹きする。予熱完了後（250℃）、グリル皿を下段に入れ、合計18〜20分に設定してスタート。最初の約5分は250℃。', timer: { min: 5, label: '焼成① 250℃' },
+              bake: { method: 'oven', preheat: 250, temp: 250, min: 5, max: 5, steam: false, mist: true } },
+            { id: 'bg-bake2', phase: 'bake', title: '焼成②', body: '自動で210℃に下がる（操作は不要）。濃い色まで焼かず、しっかりきつね色で止める。', timer: { min: 13, max: 15, label: '焼成② 210℃' },
+              bake: { method: 'oven', temp: 210, min: 13, max: 15, steam: false },
               tips: ['薄い色で止めると皮がすぐしんなりする。パリッとさせるにはきつね色まで'] },
             FR_COOL('bg'),
           ],
-          tips: ['細めなので焼きすぎると硬くなりやすい', 'クープは斜めに3〜4本・浅め', FR_STEAM_TIP],
+          tips: ['細めなので焼きすぎると硬くなりやすい', 'クープは斜めに3〜4本・浅め', FR_STEAM_TIP, FR_OVEN_TIP],
         },
         {
           id: 'batard', name: 'バタール', ...FR_BASE(1, '1本分', '本'),
-          bakeSummary: '250℃予熱 → 230℃蒸気 7分 → 215℃ 18〜23分',
+          bakeSummary: '250℃予熱 → 霧吹き → 250℃ 約5分 → 自動で210℃ 22〜27分',
           ingredientGroups: FR_GROUPS(),
           steps: [
             ...FR_DOUGH('bt'),
             { id: 'bt6', phase: 'shape', title: '成形', body: '長方形に広げて上下を中央へ折り、巻いて綴じ目を閉じる。両端を少し細くし、約25〜28cmに整える。' },
             FR_PROOF('bt'),
             { id: 'bt8', phase: 'top', title: 'クープ', body: '斜めに2〜3本、刃を寝かせて浅めに入れる。' },
-            { id: 'bt-bake1', phase: 'bake', title: '焼成①', body: '250℃で予熱し、入れたら230℃に下げる。蒸気あり。', timer: { min: 7, label: '焼成① 230℃' },
-              bake: { method: 'oven', preheat: 250, temp: 230, min: 7, max: 7, steam: true } },
-            { id: 'bt-bake2', phase: 'bake', title: '焼成②', body: '蒸気を止め、215℃で焼く。中程度のきつね色まで。中心温度を測れる場合は95℃前後が目安。', timer: { min: 18, max: 23, label: '焼成② 215℃' },
-              bake: { method: 'oven', temp: 215, min: 18, max: 23, steam: false },
+            { id: 'bt-bake1', phase: 'bake', title: '焼成①', body: '生地の表面にたっぷり霧吹きする。予熱完了後（250℃）、グリル皿を下段に入れ、合計27〜32分に設定してスタート。最初の約5分は250℃。', timer: { min: 5, label: '焼成① 250℃' },
+              bake: { method: 'oven', preheat: 250, temp: 250, min: 5, max: 5, steam: false, mist: true } },
+            { id: 'bt-bake2', phase: 'bake', title: '焼成②', body: '自動で210℃に下がる（操作は不要）。中程度のきつね色まで。中心温度を測れる場合は95℃前後が目安。', timer: { min: 22, max: 27, label: '焼成② 210℃' },
+              bake: { method: 'oven', temp: 210, min: 22, max: 27, steam: false },
               tips: ['焼き色が付いても中心温度が低ければ数分追加する', '底を叩いて軽い音がすれば焼き上がり'] },
             FR_COOL('bt', '網の上で20分以上冷ます。温かいうちは袋に入れない。'),
           ],
-          tips: ['1本で焼くので、バゲットより長めに焼く', FR_STEAM_TIP],
+          tips: ['1本で焼くので、バゲットより長めに焼く', FR_STEAM_TIP, FR_OVEN_TIP],
         },
         {
           id: 'coupe', name: 'クッペ', ...FR_BASE(4, '4個分', '個'),
-          bakeSummary: '250℃予熱 → 230℃蒸気 6分 → 210℃ 7〜9分',
+          bakeSummary: '250℃予熱 → 霧吹き → 250℃ 約5分 → 自動で210℃ 8〜10分',
           ingredientGroups: FR_GROUPS(),
           steps: [
             ...FR_DOUGH('cu'),
             { id: 'cu6', phase: 'shape', title: '成形', body: '軽く楕円に広げ、上下を中央へ折って巻き、綴じ目を閉じる。両端を細め、約13〜15cmの舟形に整える。' },
             FR_PROOF('cu'),
             { id: 'cu8', phase: 'top', title: 'クープ', body: '中央に長いクープを1本入れる。' },
-            { id: 'cu-bake1', phase: 'bake', title: '焼成①', body: '250℃で予熱し、入れたら230℃に下げる。蒸気あり。', timer: { min: 6, label: '焼成① 230℃' },
-              bake: { method: 'oven', preheat: 250, temp: 230, min: 6, max: 6, steam: true } },
-            { id: 'cu-bake2', phase: 'bake', title: '焼成②', body: '蒸気を止め、210℃で焼く。淡い色より少ししっかり、きつね色まで。', timer: { min: 7, max: 9, label: '焼成② 210℃' },
-              bake: { method: 'oven', temp: 210, min: 7, max: 9, steam: false } },
+            { id: 'cu-bake1', phase: 'bake', title: '焼成①', body: '生地の表面にたっぷり霧吹きする。予熱完了後（250℃）、グリル皿を下段に入れ、合計13〜15分に設定してスタート。最初の約5分は250℃。', timer: { min: 5, label: '焼成① 250℃' },
+              bake: { method: 'oven', preheat: 250, temp: 250, min: 5, max: 5, steam: false, mist: true } },
+            { id: 'cu-bake2', phase: 'bake', title: '焼成②', body: '自動で210℃に下がる（操作は不要）。淡い色より少ししっかり、きつね色まで。', timer: { min: 8, max: 10, label: '焼成② 210℃' },
+              bake: { method: 'oven', temp: 210, min: 8, max: 10, steam: false } },
             FR_COOL('cu'),
           ],
-          tips: ['プレーンで食べる用。明太フランスにするときは「明太フランス」の焼き方で（一度目は淡く焼く）', FR_STEAM_TIP],
+          tips: ['プレーンで食べる用。明太フランスにするときは「明太フランス」の焼き方で（一度目は淡く焼く）', FR_STEAM_TIP, FR_OVEN_TIP],
         },
         {
           id: 'mentai', name: '明太フランス', ...FR_BASE(4, '4個分', '個'),
           timeLabel: '約3.5〜4時間',
-          bakeSummary: '230℃蒸気 6分 → 210℃ 5〜7分 → 明太バターを塗って190℃ 4〜6分',
+          bakeSummary: '250℃予熱 → 霧吹き → 250℃ 約5分 → 自動で210℃ 6〜8分 → 明太バターを塗って190℃ 4〜6分',
           ingredientGroups: FR_GROUPS([
             { id: 'filling', name: '明太バター', kind: 'filling', items: [
               { id: 'mentaiko', name: '明太子（薄皮を除く）', perCount: { target: 12.5 }, note: '4個で50g。控えめにするなら2/3量' },
@@ -789,18 +864,18 @@ export function buildSeedRecipes() {
             { id: 'mt6', phase: 'shape', title: '成形', body: '軽く楕円に広げ、上下を中央へ折って巻き、綴じ目を閉じる。両端を細め、約13〜15cmの舟形に整える。' },
             FR_PROOF('mt'),
             { id: 'mt8', phase: 'top', title: 'クープ', body: '中央に長いクープを1本入れる。' },
-            { id: 'mt-bake1', phase: 'bake', title: '一度目の焼成①', body: '250℃で予熱し、入れたら230℃に下げる。蒸気あり。', timer: { min: 6, label: '焼成① 230℃' },
-              bake: { method: 'oven', preheat: 250, temp: 230, min: 6, max: 6, steam: true } },
-            { id: 'mt-bake2', phase: 'bake', title: '一度目の焼成②', body: '蒸気を止め、210℃で焼く。完全に焼き切らず、淡いきつね色で取り出す。', timer: { min: 5, max: 7, label: '焼成② 210℃' },
-              bake: { method: 'oven', temp: 210, min: 5, max: 7, steam: false } },
+            { id: 'mt-bake1', phase: 'bake', title: '一度目の焼成①', body: '生地の表面にたっぷり霧吹きする。予熱完了後（250℃）、グリル皿を下段に入れ、合計11〜13分に設定してスタート。最初の約5分は250℃。', timer: { min: 5, label: '焼成① 250℃' },
+              bake: { method: 'oven', preheat: 250, temp: 250, min: 5, max: 5, steam: false, mist: true } },
+            { id: 'mt-bake2', phase: 'bake', title: '一度目の焼成②', body: '自動で210℃に下がる（操作は不要）。完全に焼き切らず、淡いきつね色で取り出す。', timer: { min: 6, max: 8, label: '焼成② 210℃' },
+              bake: { method: 'oven', temp: 210, min: 6, max: 8, steam: false } },
             { id: 'mt9', phase: 'top', title: '明太バターを塗る', uses: ['mentaiko', 'mbutter', 'mayo'],
-              body: '5分ほど粗熱を取る。クープの切れ目を浅く広げ、明太バターを{{count}}等分して塗る。側面まで切り開かない。オーブンは190℃にしておく。',
+              body: '5分ほど粗熱を取る。その間にオーブンを手動「オーブン」予熱あり190℃にする（庫内は熱いのですぐ予熱が終わる）。クープの切れ目を浅く広げ、明太バターを{{count}}等分して塗る。側面まで切り開かない。',
               timer: { min: 5, label: '粗熱を取る' } },
-            { id: 'mt-bake3', phase: 'bake', title: '二度焼き', body: '190℃で焼く。バターが溶け、表面が乾いて軽く色づいたら止める。焼きすぎるとパンが硬くなる。', timer: { min: 4, max: 6, label: '二度焼き 190℃' },
+            { id: 'mt-bake3', phase: 'bake', title: '二度焼き', body: 'グリル皿を下段に入れ、190℃で焼く。バターが溶け、表面が乾いて軽く色づいたら止める。焼きすぎるとパンが硬くなる。', timer: { min: 4, max: 6, label: '二度焼き 190℃' },
               bake: { method: 'oven', temp: 190, min: 4, max: 6, steam: false } },
             FR_COOL('mt', '5分ほど休ませ、温かいうちに食べる。'),
           ],
-          tips: ['明太子は薄皮を除いて計量', '辛さは明太子の種類で調整', '一度目は淡く焼く（二度焼きで色が付く）', FR_STEAM_TIP],
+          tips: ['明太子は薄皮を除いて計量', '辛さは明太子の種類で調整', '一度目は淡く焼く（二度焼きで色が付く）', FR_STEAM_TIP, FR_OVEN_TIP],
         },
       ],
     }),

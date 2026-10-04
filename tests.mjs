@@ -1,7 +1,7 @@
 // パンノート 自動テスト（計算・標準レシピ・移行処理）
 // 実行: node tests.mjs  （app.js と同じフォルダで）
 import * as C from './calc.js';
-import { buildSeedRecipes, migrateRecipes, normalizeVariant, applyStepMeta, SEED_VERSION, DOUGH_FAMILIES } from './seed.js';
+import { buildSeedRecipes, migrateRecipes, normalizeVariant, applyStepMeta, SEED_VERSION, DOUGH_FAMILIES, OVEN } from './seed.js';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = '') => {
@@ -516,7 +516,8 @@ console.log('v1.5-1. 標準レシピの構造化データ');
   const amb = []; C.eachStep(rd.steps, (st) => { if (st.ferment) amb.push(st.ferment.tempMode); });
   ok('ロデヴ：室温発酵はすべて tempMode:ambient（数値にしない）', amb.length === 3 && amb.every((x) => x === 'ambient') && (() => { let n = 0; C.eachStep(rd.steps, (st) => { if (st.ferment && (st.ferment.tempMin != null || st.ferment.tempMax != null)) n++; }); return n === 0; })());
   const bk = []; C.eachStep(rd.steps, (st) => { if (st.phase === 'bake') bk.push(st.bake); });
-  ok('ロデヴ：焼成工程は計画ごとに2つ（250℃スチーム10分 → 230℃ 15〜18分）', bk.length === 4 && bk[0].temp === 250 && bk[0].steam === true && bk[0].min === 10 && bk[1].temp === 230 && bk[1].steam === false && bk[1].max === 18);
+  // v2.1.0：NE-BS655（250℃は約5分で自動的に210℃・スチームの代わりに霧吹き）
+  ok('ロデヴ：焼成工程は計画ごとに2つ（250℃ 5分・霧吹き → 自動で210℃ 20〜23分）', bk.length === 4 && bk[0].temp === 250 && bk[0].steam === false && bk[0].mist === true && bk[0].min === 5 && bk[1].temp === 210 && bk[1].steam === false && bk[1].min === 20 && bk[1].max === 23);
   ok('ロデヴ：冷蔵発酵は phase:dough', C.findStep(rd.steps, 'cd-cold').phase === 'dough');
   const sh = R('shokupan-junnama').variants;
   ok('食パン A/B/C は同じ系統 rich-shokupan', sh.every((v) => v.dough?.familyId === 'rich-shokupan'));
@@ -527,7 +528,8 @@ console.log('v1.5-1. 標準レシピの構造化データ');
   ok('カレーパン：系統 curry-bread-dough', cu.dough?.familyId === 'curry-bread-dough');
   ok('新しい系統が DOUGH_FAMILIES にある', (() => { const f = DOUGH_FAMILIES; return f['lean-high-hydration'] && f['rich-shokupan'] && f['curry-bread-dough']; })());
   // v2.0.3 でカレーパンは内容の改訂（rev3）をしたので 3。V1.5 のメタデータ追加では上げていない
-  ok('seedRev は上げていない（メタデータのみ）', R('curry-pan').seedRev === 3 && R('rodev-90').seedRev === 3 && R('shokupan-junnama').seedRev === 3 && R('anpan').seedRev === 2 && R('cream-pan').seedRev === 1 && R('choco-pan').seedRev === 1);
+  // V1.5 のメタデータ追加では seedRev を上げていない。以降の内容改訂（v2.0.3 カレーパン、v2.1.0 NE-BS655 対応）で上がった値
+  ok('seedRev は内容の改訂でだけ上がる', R('curry-pan').seedRev === 4 && R('rodev-90').seedRev === 4 && R('shokupan-junnama').seedRev === 5 && R('anpan').seedRev === 3 && R('cream-pan').seedRev === 2 && R('choco-pan').seedRev === 2);
 }
 
 console.log('v1.5-2. SEED_VERSION 6 → 7 の移行（メタデータだけ）');
@@ -619,9 +621,9 @@ console.log('v1.5-4. 発酵温度（ambient と数値範囲）');
   const y = clone(sweet[2][1]); Object.assign(y.steps.find((s) => s.phase === 'proof').ferment, { tempMin: 36, tempMax: 38 });
   const d = C.compatVariants(sweet[0][1], y);
   ok('二次発酵 32〜35 × 36〜38：生地は一緒に仕込める（途中から別工程）・理由「二次発酵が違う」', d.level === 'split' && d.label === '生地は一緒に仕込める（途中から別工程）' && d.reasons.some((r) => r.key === 'proof' && r.status === 'ng' && /二次発酵が違う/.test(r.text)));
-  const z = clone(sweet[1][1]); Object.assign(z.steps.find((s) => s.id === 'h7').ferment, { tempMin: 35, tempMax: 38 });
+  const z = clone(sweet[1][1]); Object.assign(z.steps.find((s) => s.id === 'h7').ferment, { tempMin: 37, tempMax: 39 });
   const zz = clone(sweet[1][1]);
-  ok('一次発酵 28〜30 × 35〜38：一次発酵が違う', C.compatVariants(zz, z).reasons.some((r) => r.key === 'primary' && r.status === 'ng'));
+  ok('一次発酵 35 × 37〜39：一次発酵が違う', C.compatVariants(zz, z).reasons.some((r) => r.key === 'primary' && r.status === 'ng'));
   ok('計画の並び順が違っても同じ id どうしで比べる', (() => { const b = clone(rd); C.planBranch(b).options.reverse(); const c2 = C.compatVariants(rd, b); return c2.plans.length === 2 && c2.plans.every((p) => p.a === p.b && p.level === 'same'); })());
   const ren = clone(rd); for (const o of C.planBranch(ren).options) o.id = o.id + '2';
   const cr = C.compatVariants(rd, ren);
@@ -731,7 +733,7 @@ console.log('v2-1. planBatch：基本（あんぱんB・クリーム・チョコ
   ok('divide は共通1つ・内訳つき', by('divide').length === 1 && by('divide')[0].allocation.length === 3 && /12分割/.test(by('divide')[0].body));
   ok('shape・top・after はパン別', ['shape', 'top', 'after'].every((k) => by(k).length === 3 && by(k).every((s2) => s2.member)));
   ok('proof・bake は共通1つ', by('proof').length === 1 && !by('proof')[0].member && by('bake').length === 1 && !by('bake')[0].member);
-  ok('二次発酵：共通範囲 32〜35℃ 40〜60分・目安（cue）を残す', (() => { const f = by('proof')[0].ferment; return f.tempMin === 32 && f.tempMax === 35 && f.min === 40 && f.max === 60 && /ひと回りふっくら/.test(f.cue); })());
+  ok('二次発酵：共通範囲 35℃ 30〜45分（ビストロの発酵）・目安（cue）を残す', (() => { const f = by('proof')[0].ferment; return f.tempMin === 35 && f.tempMax === 35 && f.min === 30 && f.max === 45 && /ひと回り弱/.test(f.cue); })());
   ok('焼き時間が同じなら bakeOut なし', !by('bake')[0].bakeOut && p.bakeOut === null);
   ok('カスタード冷却は parallel のまま', p.steps.find((s2) => s2.id === 'm1:cp1')?.parallel === true);
   ok('本文のテンプレートは開始時に埋める（{{ }} が残らない）', p.steps.every((s2) => !/\{\{/.test(s2.body || '')), p.steps.filter((s2) => /\{\{/.test(s2.body || '')).map((s2) => s2.id).join());
@@ -756,10 +758,10 @@ console.log('v2-2. planBatch：開始できない条件');
   const hot = clone(R('choco-pan').variants[0]); hot.steps.find((s2) => s2.phase === 'bake').bake.temp = 190;
   ok('「同じ生地で同時に作れる」でない組（焼成 190℃）：不可・理由つき', /同じ生地で同時に作れません.*焼成条件が違う/.test(E([M('cream-pan', null, 4), M('choco-pan', null, 4, hot)])));
   const late = clone(R('choco-pan').variants[0]); Object.assign(late.steps.find((s2) => s2.phase === 'proof').ferment, { min: 70, max: 90 });
-  ok('二次発酵の時間が重ならない（40〜60 × 70〜90）：不可', /二次発酵の時間が重なりません/.test(E([M('cream-pan', null, 4), M('choco-pan', null, 4, late)])));
-  const mid = clone(R('choco-pan').variants[0]); Object.assign(mid.steps.find((s2) => s2.phase === 'proof').ferment, { min: 45, max: 60 });
+  ok('二次発酵の時間が重ならない（30〜45 × 70〜90）：不可', /二次発酵の時間が重なりません/.test(E([M('cream-pan', null, 4), M('choco-pan', null, 4, late)])));
+  const mid = clone(R('choco-pan').variants[0]); Object.assign(mid.steps.find((s2) => s2.phase === 'proof').ferment, { min: 35, max: 50 });
   const pm = C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4, mid), M('anpan', 'hb', 4)]);
-  ok('40〜60 × 45〜60：共通範囲 45〜60分', pm.ok && pm.commonProof[0].min === 45 && pm.commonProof[0].max === 60, JSON.stringify(pm.commonProof));
+  ok('30〜45 × 35〜50：共通範囲 35〜45分', pm.ok && pm.commonProof[0].min === 35 && pm.commonProof[0].max === 45, JSON.stringify(pm.commonProof));
   ok('型焼き（食パン B・C）：不可', /型焼き/.test(E([M('shokupan-junnama', 'hb-pan12', 1), M('cream-pan', null, 4)])));
   const nomix = clone(R('choco-pan').variants[0]); nomix.mix = false;
   ok('mix:false の variant：不可', !C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4, nomix)]).ok);
@@ -818,9 +820,9 @@ console.log('v2.0.1-2. 知らない工程区分があれば止める（黙って
 console.log('v2.0.2-1. 二次発酵：全員が時間範囲を持つときだけまとめて作れる');
 {
   const noTime = () => { const v = clone(R('cream-pan').variants[0]); const f = v.steps.find((s2) => s2.phase === 'proof').ferment; delete f.min; delete f.max; return v; };
-  const t45 = clone(R('choco-pan').variants[0]); Object.assign(t45.steps.find((s2) => s2.phase === 'proof').ferment, { min: 45, max: 60 });
+  const t45 = clone(R('choco-pan').variants[0]); Object.assign(t45.steps.find((s2) => s2.phase === 'proof').ferment, { min: 35, max: 50 });
   const p1 = C.planBatch([M('anpan', 'hb', 4), M('choco-pan', null, 4, t45)]);
-  ok('40〜60 × 45〜60：可・共通 45〜60分', p1.ok && p1.commonProof[0].min === 45 && p1.commonProof[0].max === 60 && p1.steps.find((s2) => s2.phase === 'proof').ferment.min === 45);
+  ok('30〜45 × 35〜50：可・共通 35〜45分', p1.ok && p1.commonProof[0].min === 35 && p1.commonProof[0].max === 45 && p1.steps.find((s2) => s2.phase === 'proof').ferment.min === 35);
   const nt = noTime();
   ok('時間なしの二次発酵も、通常の入力チェックでは許可のまま', C.validateVariant(nt).length === 0);
   ok('   V1.5 の判定も same のまま（温度で判定）', C.compatVariants(R('anpan').variants[0], nt).level === 'same');
@@ -855,7 +857,7 @@ console.log('v2.0.2-2. 多段焼成：途中の段は全員の時間範囲の重
   ok('第1段 10〜11 × 12〜13：不可', !p2.ok, p2.errors.join());
   const p3 = C.planBatch(mem(clone(rd), clone(rd)), { planId: 'today' });
   const s3 = p3.steps.find((x) => x.id === 'L:td-bake1');
-  ok('第1段 10 × 10：従来どおり 10分（注記なし）', p3.ok && s3.timer.min === 10 && s3.timer.max == null && s3.bake.min === 10 && !(s3.tips || []).some((t) => /まとめて作るときの時間/.test(t)), JSON.stringify(s3?.timer));
+  ok('第1段 5 × 5：そのまま 5分（注記なし）', p3.ok && s3.timer.min === 5 && s3.timer.max == null && s3.bake.min === 5 && !(s3.tips || []).some((t) => /まとめて作るときの時間/.test(t)), JSON.stringify(s3?.timer));
   const p4 = C.planBatch(mem(withStages(null, [15, 18]), withStages(null, [16, 20])), { planId: 'today' });
   const last = p4.steps.find((x) => x.id === 'L:td-bake2');
   ok('最終段 15〜18 × 16〜20：可・パン別の取り出しタイマーのまま', p4.ok && last.bakeOut?.length === 2 && last.bakeOut[0].min === 15 && last.bakeOut[1].max === 20, JSON.stringify(last?.bakeOut));
@@ -882,7 +884,7 @@ console.log('v2.0.3. カレーパン rev3（A：ベーキングパウダー／B�
 {
   const r = R('curry-pan');
   const [A, B] = r.variants;
-  ok('seedRev 3・2通り（A は従来の id std のまま、B は yeast）', r.seedRev === 3 && r.variants.length === 2 && A.id === 'std' && B.id === 'yeast');
+  ok('seedRev 4・2通り（A は従来の id std のまま、B は yeast）', r.seedRev === 4 && r.variants.length === 2 && A.id === 'std' && B.id === 'yeast');
   ok('両方とも入力チェックを通り、工程データがそろう', [A, B].every((v) => C.validateVariant(v).length === 0 && C.phaseComplete(v)));
   const aa = C.computeAmounts(A, C.scaleFor(A, {}));
   ok('A の配合は従来どおり（粉150g・生地 約268g・1本 約44.7g）', Math.abs(aa.dough - 268) < 1e-9 && Math.abs(aa.piece - 44.667) < 0.01);
@@ -899,7 +901,7 @@ console.log('v2.0.3. カレーパン rev3（A：ベーキングパウダー／B�
   const fry = (v) => v.steps.find((s2) => s2.phase === 'bake');
   ok('揚げ：A 170〜175℃ 3〜4分／B 170℃ 4分（phase:bake・method:fry）', fry(A).bake.method === 'fry' && fry(A).bake.tempMin === 170 && fry(A).bake.tempMax === 175 && fry(B).bake.method === 'fry' && fry(B).bake.tempMin === 170 && fry(B).bake.max === 4);
   ok('揚げは2本ずつ・網に立てかけて油を切る（A・B とも本文に）', [A, B].every((v) => /2本ずつ/.test(fry(v).body) && /立てかけ/.test(fry(v).body)));
-  ok('B：衣を付けてから二次発酵（30〜35℃ 20〜25分）', (() => { const i = B.steps.findIndex((s2) => s2.id === 'y8'); const pr = B.steps.find((s2) => s2.phase === 'proof'); return i >= 0 && B.steps.indexOf(pr) > i && pr.ferment.min === 20 && pr.ferment.max === 25 && pr.ferment.tempMin === 30 && pr.ferment.tempMax === 35; })());
+  ok('B：衣を付けてから二次発酵（ビストロの発酵35℃・給水タンクは空・20〜25分）', (() => { const i = B.steps.findIndex((s2) => s2.id === 'y8'); const pr = B.steps.find((s2) => s2.phase === 'proof'); return i >= 0 && B.steps.indexOf(pr) > i && pr.ferment.min === 20 && pr.ferment.max === 25 && pr.ferment.tempMin === 35 && pr.ferment.tempMax === 35 && /給水タンクは空/.test(pr.body); })());
   ok('B：工程の区分は順番どおり（衣は成形の区分）', (() => { let last = -1; return B.steps.every((s2) => { const k = C.PHASE_ORDER.indexOf(s2.phase); const okk = k >= last; last = k; return okk; }); })());
   ok('使う材料（uses）はすべて材料にある', [A, B].every((v) => { const a = C.computeAmounts(v, C.scaleFor(v, {})); return v.steps.every((s2) => (s2.uses || []).every((u) => a.rows[typeof u === 'string' ? u : u.ref])); }));
   ok('本文のテンプレートがすべて埋まる', [A, B].every((v) => { const a = C.computeAmounts(v, C.scaleFor(v, {})); return v.steps.every((s2) => !/\{\{/.test(C.tpl(s2.body, a))); }));
@@ -920,10 +922,10 @@ console.log('v2.0.4. 外パリ中ふわフランスパン（4つの形）');
   ok('分割：バゲット2本 約259g／バタール1本 517g／クッペ・明太 4個 約129g', [[0, 258.5], [1, 517], [2, 129.25], [3, 129.25]].every(([i, w]) => Math.abs(amt(r.variants[i]).piece - w) < 0.01));
   ok('単位：バゲット・バタールは「本」、クッペ・明太は「個」', r.variants.map((v) => v.countUnit).join() === '本,本,個,個');
   const stages = (v) => v.steps.filter((s) => s.phase === 'bake').map((s) => [s.bake.temp, s.bake.min, s.bake.max, !!s.bake.steam, s.bake.preheat ?? null]);
-  ok('バゲット：250℃予熱・250℃蒸気7分 → 220℃ 10〜12分', JSON.stringify(stages(r.variants[0])) === JSON.stringify([[250, 7, 7, true, 250], [220, 10, 12, false, null]]));
-  ok('バタール：250℃予熱 → 230℃蒸気7分 → 215℃ 18〜23分（中心95℃の目安）', JSON.stringify(stages(r.variants[1])) === JSON.stringify([[230, 7, 7, true, 250], [215, 18, 23, false, null]]) && /95℃/.test(r.variants[1].steps.find((s) => s.id === 'bt-bake2').body));
-  ok('クッペ（プレーン）：230℃蒸気6分 → 210℃ 7〜9分（合計13〜15分）', JSON.stringify(stages(r.variants[2])) === JSON.stringify([[230, 6, 6, true, 250], [210, 7, 9, false, null]]));
-  ok('明太フランス：230℃蒸気6分 → 210℃ 5〜7分（淡く）→ 塗って 190℃ 4〜6分', JSON.stringify(stages(r.variants[3])) === JSON.stringify([[230, 6, 6, true, 250], [210, 5, 7, false, null], [190, 4, 6, false, null]]));
+  ok('バゲット：250℃予熱・250℃ 5分 → 自動で210℃ 13〜15分（合計18〜20分）', JSON.stringify(stages(r.variants[0])) === JSON.stringify([[250, 5, 5, false, 250], [210, 13, 15, false, null]]));
+  ok('バタール：250℃ 5分 → 自動で210℃ 22〜27分（合計27〜32分・中心95℃の目安）', JSON.stringify(stages(r.variants[1])) === JSON.stringify([[250, 5, 5, false, 250], [210, 22, 27, false, null]]) && /95℃/.test(r.variants[1].steps.find((s) => s.id === 'bt-bake2').body));
+  ok('クッペ（プレーン）：250℃ 5分 → 自動で210℃ 8〜10分（合計13〜15分）', JSON.stringify(stages(r.variants[2])) === JSON.stringify([[250, 5, 5, false, 250], [210, 8, 10, false, null]]));
+  ok('明太フランス：250℃ 5分 → 自動で210℃ 6〜8分（淡く）→ 塗って 190℃ 4〜6分', JSON.stringify(stages(r.variants[3])) === JSON.stringify([[250, 5, 5, false, 250], [210, 6, 8, false, null], [190, 4, 6, false, null]]));
   const m = amt(r.variants[3]);
   ok('明太バターは1.5倍（4個で明太子50g・バター45g・マヨネーズ12g）・個数に比例', m.rows.mentaiko.g === 50 && m.rows.mbutter.g === 45 && m.rows.mayo.g === 12 && C.computeAmounts(r.variants[3], C.scaleFor(r.variants[3], { flour: 150 })).rows.mentaiko.g === 25);
   ok('バゲットのクープ：斜めに3〜4本・浅め', /斜めに3〜4本/.test(r.variants[0].steps.find((s) => s.phase === 'top').body));
@@ -931,6 +933,51 @@ console.log('v2.0.4. 外パリ中ふわフランスパン（4つの形）');
   ok('二次発酵：ひと回り〜1.5倍弱・35〜50分', r.variants.every((v) => { const f = v.steps.find((s) => s.phase === 'proof').ferment; return f.min === 35 && f.max === 50 && /1\.5倍弱/.test(f.cue); }));
   ok('本文のテンプレートがすべて埋まり、使う材料はすべて材料にある', r.variants.every((v) => { const a2 = amt(v); return v.steps.every((s) => !/\{\{/.test(C.tpl(s.body, a2)) && (s.uses || []).every((u) => a2.rows[typeof u === 'string' ? u : u.ref])); }));
   ok('バタールの分割は「分割せず1個にまとめる」', /分割せず1個/.test(C.tpl(r.variants[1].steps.find((s) => s.phase === 'divide').body, amt(r.variants[1]))));
+}
+
+console.log('v2.1.0. オーブン（ビストロ NE-BS655）に合わせた設計');
+{
+  const all = seeds.flatMap((r) => r.variants.map((v) => ({ r, v })));
+  const bakeSteps = all.flatMap(({ r, v }) => { const out = []; C.eachStep(v.steps, (s2) => { if (s2.phase === 'bake' && s2.bake?.method !== 'fry' && s2.bake?.method !== 'hb') out.push({ r, v, s: s2 }); }); return out; });
+  ok('オーブンの温度はすべて 80〜250℃・10℃単位（195℃・215℃などを使わない）', bakeSteps.every(({ s }) => [s.bake.temp, s.bake.preheat].filter((x) => x != null).every((t) => t >= 80 && t <= 250 && t % 10 === 0)), bakeSteps.map(({ r, s }) => `${r.id}:${s.bake.temp}/${s.bake.preheat}`).join());
+  ok('220℃以上で焼くのは最初の約5分だけ（そのあとは自動で210℃）', bakeSteps.every(({ s }) => !(s.bake.temp >= 220) || (s.bake.max ?? s.bake.min) <= 5));
+  ok('オーブン内でスチームを前提にしない（霧吹きで代わり）', bakeSteps.every(({ s }) => !s.bake.steam) && bakeSteps.filter(({ s }) => s.bake.mist).every(({ s }) => /霧吹き/.test(s.body)));
+  ok('ロデヴ・フランスパンの最初の段は霧吹き', bakeSteps.filter(({ r, s }) => (r.id === 'rodev-90' || r.id === 'french-soft') && s.bake.temp === 250).every(({ s }) => s.bake.mist === true) && bakeSteps.some(({ r }) => r.id === 'rodev-90'));
+  const ferments = all.flatMap(({ r, v }) => { const out = []; C.eachStep(v.steps, (s2) => { if (s2.ferment && /ビストロ/.test(s2.ferment.temp || '')) out.push({ r, v, s: s2 }); }); return out; });
+  ok('ビストロの発酵機能を使う工程は 35℃（設定は35℃か40℃）', ferments.length >= 6 && ferments.every(({ s }) => s.ferment.tempMin === 35 && s.ferment.tempMax === 35));
+  ok('甘い生地の二次発酵：35℃ 30〜45分（予熱の間も膨らむ分を見込む）', sweet.every(([, v]) => { const f = v.steps.find((s2) => s2.phase === 'proof').ferment; return f.min === 30 && f.max === 45 && /予熱/.test(f.cue); }));
+  ok('甘い生地の焼成：190℃予熱 → 180℃・下段', sweet.every(([, v]) => { const b = v.steps.find((s2) => s2.phase === 'bake'); return b.bake.preheat === 190 && b.bake.temp === 180 && /下段/.test(b.body); }));
+  ok('食パン B・C：210℃予熱 → 200℃ 28〜31分（195℃は使わない）', R('shokupan-junnama').variants.slice(1, 3).every((v) => { const b = v.steps.find((s2) => s2.phase === 'bake'); return b.bake.preheat === 210 && b.bake.temp === 200 && b.bake.min === 28 && b.bake.max === 31; }));
+  ok('バゲットは30cmまで（グリル皿に2本）', /30cmまで/.test(R('french-soft').variants[0].steps.find((s2) => s2.phase === 'shape').body));
+  ok('カレーパン B の二次発酵はスチームなし（パン粉が湿らない）', /給水タンクは空/.test(R('curry-pan').variants[1].steps.find((s2) => s2.phase === 'proof').body));
+  ok('予熱は庫内を空にして行う案内（甘い生地・食パン・ロデヴ・フランスパン）', ['anpan', 'shokupan-junnama', 'rodev-90', 'french-soft'].every((id) => { let hit = false; R(id).variants.forEach((v) => C.eachStep(v.steps, (s2) => { if ((s2.tips || []).some((t) => /庫内を空にして/.test(t))) hit = true; })); return hit; }));
+  ok('OVEN の定義', C && typeof OVEN === 'object' && /NE-BS655/.test(OVEN.name));
+  // グリル皿の個数
+  ok('グリル皿：甘い生地は9個まで（8個は注意なし・12個は注意）', sweet.every(([, v]) => v.trayMax === 9) && C.trayWarning(sweet[0][1], 8) === null && /約9個まで.*12個/.test(C.trayWarning(sweet[0][1], 12)));
+  ok('trayMax の無いレシピは注意なし', C.trayWarning(R('french-soft').variants[2], 20) === null);
+  const pb12 = C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4), M('anpan', 'hb', 4)]);
+  ok('まとめて作る 12個：開始はできる・グリル皿の注意を出す', pb12.ok && pb12.warnings.length === 1 && /約9個まで/.test(pb12.warnings[0]));
+  ok('まとめて作る 8個：注意なし', C.planBatch([M('cream-pan', null, 4), M('choco-pan', null, 4)]).warnings.length === 0);
+}
+
+console.log('v2.1.1. 純生食パン D（湯種）');
+{
+  const r = R('shokupan-junnama');
+  const D = r.variants.find((v) => v.id === 'yudane-pan12');
+  ok('seedRev 5・4通り（D を追加。A〜C はそのまま）', r.seedRev === 5 && r.variants.map((v) => v.id).join() === 'hb-auto,hb-pan12,hand-pan12,yudane-pan12');
+  ok('入力チェックを通り、工程データがそろう', D && C.validateVariant(D).length === 0 && C.phaseComplete(D));
+  const a = C.computeAmounts(D, C.scaleFor(D, {}));
+  ok('粉の合計は250g（湯種の春よ恋50g＝20%を含む）', Math.round(a.flour) === 250 && a.rows.yflour.g === 50 && Math.abs(a.rows.yflour.pct.target - 20) < 1e-9 && a.rows.haru.g === 169 && a.rows.kitano.g === 31);
+  ok('湯種：熱湯50g（粉と同量）・水は入れず牛乳120〜130g', a.rows.ywater.g === 50 && !a.rows.water && a.rows.milk.min === 120 && a.rows.milk.max === 130);
+  ok('そのほか（生クリーム・砂糖・はちみつ・塩・バター・イースト）は B と同じ', ['cream', 'sugar', 'honey', 'salt', 'butter', 'yeast'].every((k) => a.rows[k].g === C.computeAmounts(r.variants[1], C.scaleFor(r.variants[1], {})).rows[k].g));
+  ok('B より水分が多い（約70%）', Math.round(a.hydration) === 70);
+  ok('前日の工程：湯種を作る → 冷蔵8〜24時間（下準備）', D.steps[0].phase === 'prep' && D.steps[1].phase === 'prep' && D.steps[1].timer.min === 480 && D.steps[1].timer.max === 1440);
+  ok('焼成：210℃予熱 → 200℃ 29〜32分（B・C より少し長め）', (() => { const b = D.steps.find((x) => x.phase === 'bake').bake; return b.preheat === 210 && b.temp === 200 && b.min === 29 && b.max === 32; })());
+  ok('二次発酵：ビストロの発酵35℃・型の縁2cm下で取り出す', /2cm下/.test(D.steps.find((x) => x.phase === 'proof').ferment.cue));
+  ok('型：12cm角型・型容積で分量変更', D.scaleMode === 'panVolume' && C.panKey(D.basePan) === C.panKey(r.variants[1].basePan));
+  ok('B・C と同じ系統・配合違い', C.compatVariants(r.variants[1], D).level === 'family' && D.dough.familyId === 'rich-shokupan');
+  ok('本文のテンプレートが埋まり、使う材料はすべて材料にある', D.steps.every((x) => !/\{\{/.test(C.tpl(x.body, a)) && (x.uses || []).every((u) => a.rows[typeof u === 'string' ? u : u.ref])));
+  ok('「冷蔵発酵」のレシピ扱いにしない（湯種の冷蔵はタイマー）', !C.hasCold(D.steps));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
