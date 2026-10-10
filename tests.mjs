@@ -529,7 +529,7 @@ console.log('v1.5-1. 標準レシピの構造化データ');
   ok('新しい系統が DOUGH_FAMILIES にある', (() => { const f = DOUGH_FAMILIES; return f['lean-high-hydration'] && f['rich-shokupan'] && f['curry-bread-dough']; })());
   // v2.0.3 でカレーパンは内容の改訂（rev3）をしたので 3。V1.5 のメタデータ追加では上げていない
   // V1.5 のメタデータ追加では seedRev を上げていない。以降の内容改訂（v2.0.3 カレーパン、v2.1.0 NE-BS655 対応）で上がった値
-  ok('seedRev は内容の改訂でだけ上がる', R('curry-pan').seedRev === 4 && R('rodev-90').seedRev === 4 && R('shokupan-junnama').seedRev === 5 && R('anpan').seedRev === 3 && R('cream-pan').seedRev === 2 && R('choco-pan').seedRev === 2);
+  ok('seedRev は内容の改訂でだけ上がる', R('curry-pan').seedRev === 4 && R('rodev-90').seedRev === 4 && R('shokupan-junnama').seedRev === 6 && R('anpan').seedRev === 3 && R('cream-pan').seedRev === 2 && R('choco-pan').seedRev === 2);
 }
 
 console.log('v1.5-2. SEED_VERSION 6 → 7 の移行（メタデータだけ）');
@@ -964,7 +964,7 @@ console.log('v2.1.1. 純生食パン D（湯種）');
 {
   const r = R('shokupan-junnama');
   const D = r.variants.find((v) => v.id === 'yudane-pan12');
-  ok('seedRev 5・4通り（D を追加。A〜C はそのまま）', r.seedRev === 5 && r.variants.map((v) => v.id).join() === 'hb-auto,hb-pan12,hand-pan12,yudane-pan12');
+  ok('D を追加（A〜C はそのまま）', r.variants.map((v) => v.id).slice(0, 4).join() === 'hb-auto,hb-pan12,hand-pan12,yudane-pan12');
   ok('入力チェックを通り、工程データがそろう', D && C.validateVariant(D).length === 0 && C.phaseComplete(D));
   const a = C.computeAmounts(D, C.scaleFor(D, {}));
   ok('粉の合計は250g（湯種の春よ恋50g＝20%を含む）', Math.round(a.flour) === 250 && a.rows.yflour.g === 50 && Math.abs(a.rows.yflour.pct.target - 20) < 1e-9 && a.rows.haru.g === 169 && a.rows.kitano.g === 31);
@@ -978,6 +978,31 @@ console.log('v2.1.1. 純生食パン D（湯種）');
   ok('B・C と同じ系統・配合違い', C.compatVariants(r.variants[1], D).level === 'family' && D.dough.familyId === 'rich-shokupan');
   ok('本文のテンプレートが埋まり、使う材料はすべて材料にある', D.steps.every((x) => !/\{\{/.test(C.tpl(x.body, a)) && (x.uses || []).every((u) => a.rows[typeof u === 'string' ? u : u.ref])));
   ok('「冷蔵発酵」のレシピ扱いにしない（湯種の冷蔵はタイマー）', !C.hasCold(D.steps));
+}
+
+console.log('v2.1.2. 純生食パン E（こねない）');
+{
+  const r = R('shokupan-junnama');
+  const Ev = r.variants.find((v) => v.id === 'noknead-pan12');
+  ok('seedRev 6・5通り（E を追加）', r.seedRev === 6 && r.variants.map((v) => v.id).join() === 'hb-auto,hb-pan12,hand-pan12,yudane-pan12,noknead-pan12');
+  ok('入力チェックを通り、工程データがそろう', Ev && C.validateVariant(Ev).length === 0 && C.phaseComplete(Ev));
+  const a = C.computeAmounts(Ev, C.scaleFor(Ev, {}));
+  ok('粉は B・C と同じ（春よ恋219g＋キタノカオリ31g＝87.5：12.5）', a.rows.haru.g === 219 && a.rows.kitano.g === 31 && C.computeAmounts(r.variants[1], C.scaleFor(r.variants[1], {})).rows.haru.g === 219);
+  ok('元レシピの配合（砂糖20・はちみつ10・塩4・牛乳100・イースト3・生クリーム100・バター20）', ['sugar:20', 'honey:10', 'salt:4', 'milk:100', 'yeast:3', 'cream:100', 'butter:20'].every((x) => { const [k, g] = x.split(':'); return a.rows[k].g === +g; }) && !a.rows.water);
+  ok('生地 約507g・12cm角型', Math.round(a.dough) === 507 && C.panKey(Ev.basePan) === C.panKey(r.variants[1].basePan));
+  const steps = Ev.steps;
+  const fer = steps.filter((s2) => s2.ferment && s2.phase === 'dough');
+  const folds = steps.filter((s2) => /^折りたたみ/.test(s2.title));
+  ok('発酵4回（35℃）・折りたたみ3回が交互', fer.length === 4 && folds.length === 3 && steps.slice(3, 10).map((s2) => (s2.ferment ? 'F' : 'X')).join('') === 'FXFXFXF' && fer.every((s2) => s2.ferment.tempMin === 35 && s2.ferment.tempMax === 35));
+  ok('発酵は膨らみ優先（④は30〜60分・約2倍が目安、①〜③も状態を優先）', fer[3].ferment.min === 30 && fer[3].ferment.max === 60 && /約2倍/.test(fer[3].ferment.cue) && fer.slice(0, 3).every((s2) => /状態を優先/.test(s2.ferment.cue)));
+  ok('2分割（約254g）・ベンチ10分', /2等分/.test(steps.find((s2) => s2.phase === 'divide').body) && steps.find((s2) => s2.phase === 'divide').timer.min === 10);
+  const pr = steps.find((s2) => s2.phase === 'proof');
+  ok('二次発酵：35℃・高さ優先（人差し指の第一関節）・予熱は庫内を空に', pr.ferment.tempMin === 35 && pr.ferment.tempMax === 35 && /第一関節/.test(pr.ferment.cue) && pr.tips.some((t) => /庫内を空にして190℃/.test(t)));
+  const bk = steps.find((s2) => s2.phase === 'bake');
+  ok('焼成：190℃予熱 → 190℃ 28〜32分（28分で確認・2〜3分ずつ追加）・蓋あり', bk.bake.preheat === 190 && bk.bake.temp === 190 && bk.bake.min === 28 && bk.bake.max === 32 && /28分で一度確認/.test(bk.body) && /2〜3分ずつ/.test(bk.body) && /蓋/.test(bk.body));
+  ok('B・C と同じ系統・配合違い', C.compatVariants(r.variants[1], Ev).level === 'family');
+  ok('本文のテンプレートが埋まり、使う材料はすべて材料にある', steps.every((x) => !/\{\{/.test(C.tpl(x.body, a)) && (x.uses || []).every((u) => a.rows[typeof u === 'string' ? u : u.ref])));
+  ok('比較の注意（こね方だけの比較ではない）を tips に', Ev.tips.some((t) => /こね方だけの比較ではなく/.test(t)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
