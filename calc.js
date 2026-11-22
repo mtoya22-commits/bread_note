@@ -598,6 +598,15 @@ export function validateVariant(v) {
     if (st.timer) span(st.timer.min, st.timer.max, 'タイマー', '分');
     if (st.ferment) span(st.ferment.min, st.ferment.max, '発酵時間', '分');
     // 冷蔵は取り出し目安の計算に最短・最長の両方を使うので、どちらも必須
+    // 記録項目（膜の状態など）：作るモードで選ぶ。label は文字列、options は1〜5件（各 v・t は文字列）
+    if (st.check != null) {
+      const c = st.check;
+      if (typeof c !== 'object' || typeof c.label !== 'string' || !c.label.trim()) errs.push(`「${t}」の記録項目の名前が不正です`);
+      const o = c && typeof c === 'object' ? c.options : null;
+      if (!Array.isArray(o) || o.length < 1 || o.length > 5 || o.some((x) => !x || typeof x.v !== 'string' || !x.v || typeof x.t !== 'string' || !x.t.trim())) {
+        errs.push(`「${t}」の記録項目の選択肢は1〜5件（それぞれ値と表示名の文字列）にしてください`);
+      }
+    }
     if (st.cold) {
       const { minH, maxH } = st.cold;
       if (!(num(minH) && +minH > 0) || !(num(maxH) && +maxH > 0)) errs.push(`「${t}」の冷蔵時間は最短・最長の両方を0より大きい数で入力してください`);
@@ -1022,4 +1031,135 @@ export function batchChildRepairs(bakes, batches, now = Date.now()) {
     out.push({ id: k.id, status, finishedAt: k.finishedAt || x?.finishedAt || k.updatedAt || now });
   }
   return out;
+}
+
+/* ───────────────────────── 前回の記録（v2.3.0） ───────────────────────── */
+export const JUDGE_LABEL = { early: 'まだ早い', good: 'ちょうどいい', done: '発酵完了' };
+// まとめて作るときの工程 id は「L:」（共通）や「m0:」（パン別）が前に付く。対応づけはこれを外した id で行う
+export const baseStepId = (id) => String(id ?? '').replace(/^(L|m\d+):/, '');
+
+/** 前回の記録：同じレシピ・同じ種類（variant id）の完了した記録（status 'done'）のうち、startedAt が一番新しいもの */
+export function previousBake(bakes, recipeId, variantId, excludeIds = []) {
+  const ex = new Set(excludeIds);
+  let best = null;
+  for (const b of bakes || []) {
+    if (!b || b.status !== 'done' || ex.has(b.id) || b.recipeId !== recipeId || b.snapshot?.variantId !== variantId) continue;
+    if (!best || (b.startedAt || 0) > (best.startedAt || 0)) best = b;
+  }
+  return best;
+}
+
+/** 進行記録を持っている側（まとめて作った記録なら batch）と、そのうちこのパンの工程の接頭辞 */
+function runOf(bake, batches) {
+  if (!bake?.batchId) return { run: bake, owners: null };
+  const bx = (batches || []).find((x) => x.id === bake.batchId);
+  if (!bx) return { run: null, owners: null };
+  const owners = new Set();
+  const i = (bx.snapshot.allocation || []).findIndex((a) => a.bakeId === bake.id);
+  if (i >= 0) owners.add(`m${i}:`);
+  // 共通の工程（L:）は、生地の作り方がこのパン自身のレシピ・種類だったときだけ、このパンの手順として扱う
+  const mix = bake.snapshot?.mix || {};
+  if (mix.leadRecipeId === bake.recipeId && mix.leadVariantId === bake.snapshot?.variantId) owners.add('L:');
+  return { run: bx, owners };
+}
+
+/** 前回の工程の記録：工程 id（接頭辞なし）→ { step, log }。前回の手順を、前回選んだ分岐で並べ直して読む */
+export function previousStepLogs(prevBake, batches = []) {
+  const out = new Map();
+  if (!prevBake) return out;
+  const { run, owners } = runOf(prevBake, batches);
+  if (!run?.snapshot?.variant) return out;
+  const { list } = flattenSteps(run.snapshot.variant.steps, run.progress?.choices || {});
+  for (const { step } of list) {
+    if (step.type === 'branch') continue;
+    if (owners) { const m = /^(L:|m\d+:)/.exec(step.id); if (!m || !owners.has(m[1])) continue; }
+    const L = run.progress?.log?.[step.id];
+    if (L) out.set(baseStepId(step.id), { step, log: L });
+  }
+  return out;
+}
+
+/** 前回の環境（まとめて作った記録は batch 側の共通の値） */
+export function previousEnv(prevBake, batches = []) {
+  if (!prevBake) return null;
+  const { run } = runOf(prevBake, batches);
+  return (prevBake.batchId ? run?.env : prevBake.env) || null;
+}
+
+/**
+ * 工程ごとの「前回」：タイマー・発酵・冷蔵・記録項目のある工程だけ。工程 id と工程名の両方が一致したときだけ対応させる。
+ * かかった時間は doneAt − startedAt（冷蔵は coldStart から）。1分未満、または冷蔵以外で上限の3倍超か3時間超は出さない
+ */
+export function prevStepInfo(step, prev) {
+  if (!step || step.type === 'branch' || !prev || !prev.size) return null;
+  if (!(step.timer || step.ferment || step.cold || step.check)) return null;
+  const e = prev.get(baseStepId(step.id));
+  if (!e || String(e.step.title ?? '') !== String(step.title ?? '')) return null;
+  const L = e.log || {}, ps = e.step;
+  let mins = null;
+  const from = step.cold ? L.coldStart : L.startedAt;
+  if (from && L.doneAt && L.doneAt > from) {
+    const raw = (L.doneAt - from) / 60000;
+    let cap = Infinity;
+    if (!step.cold) {
+      const ups = [ps.timer?.max ?? ps.timer?.min, ps.ferment?.max ?? ps.ferment?.min].filter((x) => Number.isFinite(+x) && +x > 0).map((x) => +x * 3);
+      cap = Math.min(180, ...ups);
+    }
+    if (raw >= 1 && raw <= cap) mins = Math.round(raw);
+  }
+  const judge = L.judgements?.length ? JUDGE_LABEL[L.judgements[L.judgements.length - 1].v] || null : null;
+  let check = null;
+  if (L.check?.v) {
+    const def = ps.check || step.check;
+    const opt = def?.options?.find((o) => o.v === L.check.v);
+    if (opt) check = { label: def.label, t: opt.t };
+  }
+  if (mins == null && !judge && !check) return null;
+  return { mins, judge, check };
+}
+
+/** 作り始めの「前回」カードの中身：日付・評価・次回メモ・入力のある環境の値・手順の版が違うか */
+export function prevSummary(prevBake, batches = [], currentVersion = null) {
+  if (!prevBake) return null;
+  const env = previousEnv(prevBake, batches) || {};
+  const envs = [['室温', env.room], ['水温', env.water], ['生地温', env.dough]].filter(([, x]) => x !== '' && x != null).map(([k, x]) => ({ k, v: String(x) }));
+  const pv = prevBake.snapshot?.recipeVersion ?? null;
+  return {
+    startedAt: prevBake.startedAt, rating: prevBake.rating ?? null,
+    nextMemo: String(prevBake.nextMemo || '').trim(), envs,
+    prevVersion: pv, versionDiffers: currentVersion != null && pv != null && pv !== currentVersion,
+  };
+}
+
+export function fmtMinsJP(m) {
+  if (m == null) return '';
+  if (m < 60) return `${m}分`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h}時間${r}分` : `${h}時間`;
+}
+/** 「前回：約9分 · 膜：破れたが、ふちはなめらか」 */
+export function prevStepLine(info) {
+  if (!info) return '';
+  const parts = [];
+  if (info.mins != null) parts.push(`約${fmtMinsJP(info.mins)}`);
+  if (info.judge) parts.push(`発酵：${info.judge}`);
+  if (info.check) parts.push(`${String(info.check.label).replace(/の状態$/, '')}：${info.check.t}`);
+  return parts.length ? `前回：${parts.join(' · ')}` : '';
+}
+
+/** 記録画面の工程ログ：タイマー・発酵・冷蔵のある工程と、記録項目を選んだ工程 */
+export function stepLogRows(run) {
+  const { list } = flattenSteps(run.snapshot.variant.steps, run.progress.choices);
+  return list.map(({ step: s }) => {
+    if (s.type === 'branch') return null;
+    const L = run.progress.log[s.id];
+    if (!L) return null;
+    const start = L.fermentStart || L.coldStart || L.timerStart;
+    const opt = L.check?.v && s.check ? s.check.options?.find((o) => o.v === L.check.v) : null;
+    const check = opt ? `${s.check.label}：${opt.t}` : '';
+    if (!start && !s.ferment && !s.cold && !s.timer && !check) return null;
+    const dur = start && L.doneAt ? L.doneAt - start : null;
+    const j = L.judgements?.length ? JUDGE_LABEL[L.judgements[L.judgements.length - 1].v] : '';
+    return { title: s.title, dur, j, start, check, timed: !!(start || s.ferment || s.cold || s.timer) };
+  }).filter(Boolean);
 }

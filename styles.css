@@ -535,3 +535,23 @@ textarea.next-memo { background: var(--accent-soft); border-color: transparent; 
 .bo-list { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 12px; }
 .bo-row { display: flex; justify-content: space-between; font-size: 14px; }
 button.log-row { width: 100%; text-align: left; }
+
+/* v2.3.0：前回の記録・記録項目 */
+.mk-prev { margin: -6px 0 12px; font-size: 14px; font-weight: 700; color: var(--accent-2); background: var(--accent-soft); border-radius: 10px; padding: 6px 10px; overflow-wrap: anywhere; line-height: 1.5; }
+.prev-card { background: var(--accent-soft); border: 0; margin: 4px 0 12px; }
+.prev-card > summary { cursor: pointer; font-weight: 700; color: var(--brown); list-style: none; overflow-wrap: anywhere; }
+.prev-card > summary::-webkit-details-marker { display: none; }
+.prev-card > summary::after { content: '▾'; float: right; color: var(--muted); }
+.prev-card:not([open]) > summary::after { content: '▸'; }
+.pv-h { font-size: 11px; font-weight: 800; color: var(--accent-2); letter-spacing: .06em; margin-right: 4px; }
+.pv-memo { margin-top: 8px; font-weight: 700; color: var(--brown); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-memo .lbl { display: block; font-size: 11px; font-weight: 800; color: var(--accent-2); letter-spacing: .06em; }
+.pv-env { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 14px; color: var(--brown-2); }
+.pv-ver { margin-top: 6px; font-size: 13px; color: var(--warn, #A4502A); font-weight: 700; }
+.pv-item { margin-top: 10px; }
+.pv-item + .pv-item { border-top: 1px solid var(--line); padding-top: 10px; }
+.pv-name { font-weight: 800; color: var(--brown); overflow-wrap: anywhere; }
+.ck-opts { display: grid; gap: 8px; }
+.ck-opts .btn.ck { min-height: 48px; font-size: 15px; white-space: normal; text-align: center; }
+.ck-opts .btn.ck.on { background: var(--brown-2); color: #FFF7EC; border-color: var(--brown-2); }
+.lr-check { display: block; }

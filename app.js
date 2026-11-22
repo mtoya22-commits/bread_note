@@ -2,7 +2,7 @@ import * as db from './db.js';
 import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited, DOUGH_FAMILIES, applyStepMeta } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '2.2.1';
+export const APP_VERSION = '2.3.0';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -766,6 +766,7 @@ function vMake(id) {
   const next = fl.list[idx + 1]?.step;
   const pct = Math.round(((idx + 1) / fl.estTotal) * 100);
   const otherTimers = b.timers.filter((t) => !t.dismissed && t.stepId !== s.id);
+  const prev = prevContext(b);
 
   let main = '';
   if (s.type === 'branch') {
@@ -806,6 +807,7 @@ function vMake(id) {
       ${cur.opt ? `<div class="mk-route">ルート：${esc(cur.opt)}</div>` : ''}
       ${who}
       <div class="mk-title">${esc(s.title)}${s.tentative ? ' <span class="badge b-warn">要確認</span>' : ''}</div>
+      ${(() => { const line = C.prevStepLine(C.prevStepInfo(s, prev.stepsFor(s))); return line ? `<div class="mk-prev">${esc(line)}</div>` : ''; })()}
       ${s.allocation ? `<div class="mk-alloc">${s.allocation.map((a) => `<span>${esc(a.name)} <b>${a.count}個</b></span>`).join('')}</div>` : ''}
       ${uses ? `<div class="mk-ings">${uses}</div>` : ''}
       <div class="mk-body">${esc(C.tpl(s.body, amt))}</div>
@@ -813,6 +815,7 @@ function vMake(id) {
       ${s.ferment ? fermentPanel(b, s, log) : ''}
       ${s.cold ? coldPanel(b, s, log) : ''}
       ${s.bakeOut ? bakeOutPanel(b, s) : s.timer ? timerPanel(b, s) : customTimerPanel(b, s)}
+      ${s.check ? checkPanel(b, s, log) : ''}
       ${s.tips?.length ? `<div class="mk-tips">${s.tips.map((t) => `💡 ${esc(t)}`).join('<br>')}</div>` : ''}`;
   }
 
@@ -829,6 +832,7 @@ function vMake(id) {
     ${b.snapshot.plan ? `<div class="mk-plan">${esc(b.snapshot.plan.icon || '')} 計画：${esc(b.snapshot.plan.label)}</div>` : ''}
     <div class="mk-stepno">STEP ${idx + 1}<span> / ${fl.estTotal}${fl.unresolved ? '〜' : ''}</span><span class="wake" id="wake-ind"></span></div>
     ${otherTimers.length ? `<div class="mk-others">${otherTimers.map((t) => `<button class="ot ${t.firedAt ? 'fired' : ''}" data-act="goto-step" data-b="${b.id}" data-s="${t.stepId}">${ICON.timer}<span>${esc(t.label)}</span>${cdSpan(t)}</button>`).join('')}</div>` : ''}
+    ${idx === 0 ? prevCard(b, prev) : ''}
     <div class="mk-main">${main}</div>
     ${next && s.type !== 'branch' ? `<div class="mk-next">次：${esc(next.title)}</div>` : ''}
     <div class="mk-nav">
@@ -836,6 +840,68 @@ function vMake(id) {
       ${s.type === 'branch' ? '<div class="mk-nav-hint">ルートを選んでください</div>'
         : `<button class="btn primary big" data-act="${isLast ? 'finish' : 'step-next'}" data-b="${b.id}">${isLast ? '完成！記録へ' : '完了して次へ →'}</button>`}
     </div>
+  </div>`;
+}
+
+/* 前回の記録（v2.3.0）：同じレシピ・同じ種類の、一番新しい完了した記録 */
+function prevContext(b) {
+  if (!isBatch(b)) {
+    const pb = C.previousBake(S.bakes, b.recipeId, b.snapshot.variantId, [b.id]);
+    const map = C.previousStepLogs(pb, S.batches);
+    return { batch: false, items: pb ? [{ name: b.snapshot.recipeName, bake: pb, version: b.snapshot.recipeVersion }] : [], stepsFor: () => map };
+  }
+  // まとめて作る：共通の工程（L:）は生地の作り方のレシピ、パン別の工程（m0: など）はそのパンの前回と対応させる
+  const ex = b.childBakeIds || [];
+  const cache = new Map();
+  const forOwner = (recipeId, variantId) => {
+    const k = `${recipeId}/${variantId}`;
+    if (!cache.has(k)) { const pb = C.previousBake(S.bakes, recipeId, variantId, ex); cache.set(k, { pb, map: C.previousStepLogs(pb, S.batches) }); }
+    return cache.get(k);
+  };
+  const alloc = b.snapshot.allocation || [];
+  const lead = b.snapshot.lead || {};
+  const items = alloc.map((a) => {
+    const kid = bakeById(a.bakeId);
+    const pb = kid ? forOwner(kid.recipeId, kid.snapshot.variantId).pb : null;
+    return pb ? { name: a.recipeName, bake: pb, version: kid.snapshot.recipeVersion } : null;
+  }).filter(Boolean);
+  const empty = new Map();
+  return {
+    batch: true, items,
+    stepsFor: (s) => {
+      const m = /^(L|m(\d+)):/.exec(s.id || '');
+      if (!m) return empty;
+      if (m[1] === 'L') return forOwner(lead.recipeId, lead.variantId).map;
+      const kid = bakeById(alloc[+m[2]]?.bakeId);
+      return kid ? forOwner(kid.recipeId, kid.snapshot.variantId).map : empty;
+    },
+  };
+}
+function prevCard(b, prev) {
+  if (!prev.items.length) return '';
+  const sums = prev.items.map((it) => ({ it, x: C.prevSummary(it.bake, S.batches, it.version) }));
+  const head = (x) => `${fmtDateY(x.startedAt)}${x.rating != null ? ` · <span class="star">${stars(x.rating)}</span>` : ''}`;
+  const verNote = (x, it) => (x.versionDiffers ? `<div class="pv-ver">前回は手順の版が違います（前回 v${x.prevVersion}・今回 v${it.version}）</div>` : '');
+  if (!prev.batch) {
+    const { it, x } = sums[0];
+    return `<details class="card prev-card" open>
+      <summary><span class="pv-h">前回</span> ${head(x)}</summary>
+      ${verNote(x, it)}
+      ${x.nextMemo ? `<div class="pv-memo"><span class="lbl">次回メモ</span>${esc(x.nextMemo)}</div>` : '<div class="muted small">次回メモなし</div>'}
+      ${x.envs.length ? `<div class="pv-env">${x.envs.map((e) => `<span>${e.k} <b>${esc(e.v)}℃</b></span>`).join('')}</div>` : ''}
+    </details>`;
+  }
+  return `<details class="card prev-card" open>
+    <summary><span class="pv-h">前回</span> パンごとの次回メモ</summary>
+    ${sums.map(({ it, x }) => `<div class="pv-item"><div class="pv-name">${esc(it.name)} <span class="muted small">${head(x)}</span></div>${verNote(x, it)}${x.nextMemo ? `<div class="pv-memo">${esc(x.nextMemo)}</div>` : '<div class="muted small">次回メモなし</div>'}</div>`).join('')}
+  </details>`;
+}
+/* 記録項目（膜の状態など）：選ばなくても次へ進める。押し直したら上書き */
+function checkPanel(b, s, log) {
+  const cur = log.check?.v;
+  return `<div class="panel check">
+    <div class="pf-h">${esc(s.check.label)} <span class="muted small">（任意）</span></div>
+    <div class="ck-opts">${s.check.options.map((o) => `<button class="btn ck ${cur === o.v ? 'on' : ''}" data-act="step-check" data-b="${b.id}" data-s="${s.id}" data-v="${esc(o.v)}" aria-pressed="${cur === o.v}">${esc(o.t)}</button>`).join('')}</div>
   </div>`;
 }
 
@@ -1204,19 +1270,8 @@ function vRecords() {
   </div>`;
 }
 
-function stepLogRows(b) {
-  const { list } = C.flattenSteps(b.snapshot.variant.steps, b.progress.choices);
-  return list.map(({ step: s }) => {
-    if (s.type === 'branch') return null;
-    const L = b.progress.log[s.id];
-    if (!L) return null;
-    const start = L.fermentStart || L.coldStart || L.timerStart;
-    if (!start && !s.ferment && !s.cold && !s.timer) return null;
-    const dur = start && L.doneAt ? L.doneAt - start : null;
-    const j = L.judgements?.length ? JUDGE[L.judgements[L.judgements.length - 1].v] : '';
-    return { title: s.title, dur, j, start };
-  }).filter(Boolean);
-}
+// 工程ログ：タイマー・発酵・冷蔵のある工程と、記録項目（膜の状態など）を選んだ工程（判定は calc.js）
+const stepLogRows = (b) => C.stepLogRows(b);
 
 function vRecord(id) {
   const b = bakeById(id);
@@ -1265,7 +1320,7 @@ function vRecord(id) {
       </div>
       <div class="muted small">${bx ? 'まとめて作ったパンで共通の値です（どのパンの記録から直しても同じ値）。' : ''}生地温：こね上がり（ロデヴは混ぜ終わり）の温度</div>`)}
 
-    ${logRows.length ? section(bx ? '共通の工程ログ' : '工程ログ', `<div class="card list">${logRows.map((x) => `<div class="log-row"><span>${esc(x.title)}</span><span class="lr-v">${x.dur != null ? fmtDur(x.dur) : x.start ? '計測中' : '-'}${x.j ? `<small>${esc(x.j)}</small>` : ''}</span></div>`).join('')}</div>`) : ''}
+    ${logRows.length ? section(bx ? '共通の工程ログ' : '工程ログ', `<div class="card list">${logRows.map((x) => `<div class="log-row"><span>${esc(x.title)}</span><span class="lr-v">${x.timed ? (x.dur != null ? fmtDur(x.dur) : x.start ? '計測中' : '-') : ''}${x.j ? `<small>${esc(x.j)}</small>` : ''}${x.check ? `<small class="lr-check">${esc(x.check)}</small>` : ''}</span></div>`).join('')}</div>`) : ''}
 
     ${section('焼成メモ', `<textarea rows="2" placeholder="${esc(v.bakeSummary || '例：250℃ 10分 → 230℃ 17分')}" data-on="rec" data-b="${b.id}" data-k="bakeMemo">${esc(b.bakeMemo)}</textarea>`)}
     ${section('感想', `<textarea rows="3" placeholder="外観・クラム・食感など" data-on="rec" data-b="${b.id}" data-k="notes">${esc(b.notes)}</textarea>`)}
@@ -1828,6 +1883,12 @@ const A = {
     const b = runById(el.dataset.b); const s = C.findStep(b.snapshot.variant.steps, el.dataset.s);
     const L = (b.progress.log[s.id] ||= {}); L.fermentStart = Date.now();
     if (s.ferment.min) addTimer(b, s, s.ferment.min, { maxMinutes: s.ferment.max, kind: 'ferment', label: `${s.title}` });
+    await saveRun(b); rerender();
+  },
+  async 'step-check'(el) {
+    // まとめて作るときは batch の進行記録に入る（runById が batch を返す）
+    const b = runById(el.dataset.b); const L = (b.progress.log[el.dataset.s] ||= {});
+    L.check = { v: el.dataset.v, at: Date.now() };
     await saveRun(b); rerender();
   },
   async 'ferm-judge'(el) {
