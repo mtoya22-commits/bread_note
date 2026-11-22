@@ -150,6 +150,17 @@ const KNEAD_AFTER_AUTOLYSE_TIPS = [
   'オートリーズの分、こね時間が短くなることがある。時間ではなく、薄く伸ばして指が透ける膜で判断する',
   '初回は、膜ができるまでの本ごねの時間を記録しておくと、前の手順と比べられる',
 ];
+// 手ごねの膜づくり（v2.2.1）
+const SLAP_KNEAD_TIPS = [
+  '生地を持ち上げて台に叩きつけ、手前に伸ばして向こうへ折り返す（叩きごね）。押しつけるより少ない力でグルテンがつながる',
+  'べたついても打ち粉は足さず、カードで台から剥がしながら続ける',
+];
+const KNEAD_REST_SENTENCE = 'こねる途中で、5分ごとにラップをかけて2〜3分休ませてよい（休んだ時間はこね時間に含めない）。';
+const WINDOWPANE_TIPS = [
+  '膜は、生地を1〜2分休ませてから確かめる。指先に少し油をつけ、中央から四方へゆっくり広げる',
+  '破れても、穴のふちがなめらかなら膜はできている（ギザギザならこね不足）。国産小麦なので、指の影が透ける程度で十分',
+];
+const HAND_KNEAD_TIP = 'こねは叩きごね、途中で休ませてよい。膜は1〜2分休ませてから確かめる';
 const HAND_FLOW_TIP = '手ごねの場合は、菓子パン生地の手ごね手順（粉と水分を混ぜる→オートリーズ20分→塩・イースト（牛乳10gで溶かす）→一次こね→バター→本ごね→生地温26〜28℃）で';
 const GLAZE_TIPS = ['塗るのは必要量だけ。厚塗りしない', '（好みで）牛乳少量で薄めて漉すとムラになりにくい'];
 
@@ -482,11 +493,11 @@ export function buildSeedRecipes() {
               body: '残しておいた牛乳{{reserve:milk:5}}を人肌に温め、ドライイーストを溶かして加える。塩をふって、全体にムラなく揉み込む。',
               tips: [SALT_YEAST_TIP] },
             { id: 'h3', phase: 'dough', title: '一次こね', body: '台に出してこねる。生地がつながり、表面が少しなめらかになったら次へ。',
-              timer: { min: 4, max: 6, label: '一次こね' } },
+              timer: { min: 4, max: 6, label: '一次こね' }, tips: SLAP_KNEAD_TIPS },
             { id: 'h4', phase: 'dough', title: 'バターを加える', uses: ['butter'], body: '柔らかくした無塩バターを加え、そのままこね続ける。',
               tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
-            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。薄く伸ばすと指が透ける膜ができればOK。',
-              timer: { min: 6, max: 12, label: '本ごね' }, tips: KNEAD_AFTER_AUTOLYSE_TIPS },
+            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。薄く伸ばすと指が透ける膜ができればOK。' + KNEAD_REST_SENTENCE,
+              timer: { min: 6, max: 12, label: '本ごね' }, tips: [...KNEAD_AFTER_AUTOLYSE_TIPS, ...WINDOWPANE_TIPS] },
             { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳の温度を下げる'] },
             { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ入れ、ラップなしでグリル皿にのせて下段へ。手動「発酵」35℃（給水タンクは満水）。時間より膨らみを優先する。',
@@ -555,6 +566,7 @@ export function buildSeedRecipes() {
           '余ったカスタードは冷蔵で翌日まで',
           '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
           HAND_FLOW_TIP,
+          HAND_KNEAD_TIP,
         ],
       }],
     }),
@@ -602,6 +614,7 @@ export function buildSeedRecipes() {
           'チョコチップを生地に練り込む方式にはしない（生地が変わるため）',
           '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
           HAND_FLOW_TIP,
+          HAND_KNEAD_TIP,
         ],
       }],
     }),
@@ -707,12 +720,12 @@ export function buildSeedRecipes() {
               tips: [SALT_YEAST_TIP] },
             { id: 'h3', phase: 'dough', title: '一次こね', body: '台に出してこねる。打ち粉は原則使わず、「押す・折る・転がす」を繰り返す。生地がつながり、表面が少しなめらかになったら次へ。',
               timer: { min: 4, max: 6, label: '一次こね' },
-              tips: ['べたつくうちはカードで台から剥がしながら続ける'] },
+              tips: SLAP_KNEAD_TIPS },
             { id: 'h4', phase: 'dough', title: 'バターを加える', uses: ['butter'],
               body: '柔らかくした無塩バターを加え、そのままこね続ける。',
               tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
-            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。滑らかで弾力があり、薄く伸ばすと指が透ける膜ができればOK。完全に破れない極薄膜まで追い込む必要はない。',
-              timer: { min: 6, max: 12, label: '本ごね' }, tips: KNEAD_AFTER_AUTOLYSE_TIPS },
+            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。滑らかで弾力があり、薄く伸ばすと指が透ける膜ができればOK。完全に破れない極薄膜まで追い込む必要はない。' + KNEAD_REST_SENTENCE,
+              timer: { min: 6, max: 12, label: '本ごね' }, tips: [...KNEAD_AFTER_AUTOLYSE_TIPS, ...WINDOWPANE_TIPS] },
             { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳などの液温を下げる'] },
             { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ入れ、ラップなしでグリル皿にのせて下段へ。手動「発酵」35℃（給水タンクは満水）。時間より膨らみを優先する。',

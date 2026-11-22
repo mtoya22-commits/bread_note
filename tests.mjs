@@ -1035,6 +1035,18 @@ console.log('v2.2.1. オートリーズ（あんぱんB・食パンC）');
     ok(`${n}：基準の分量で残す牛乳は10g`, C.splitReserve(a0.rows.milk, pct, a0.flour).reserve === 10);
     ok(`${n}：本文のテンプレートが埋まり、使う材料はすべて材料にある`, v.steps.every((x) => !/\{\{/.test(C.tpl(x.body, a0)) && (x.uses || []).every((u) => a0.rows[typeof u === 'string' ? u : u.ref])));
   }
+  // 手ごねの膜づくりのコツ（v2.2.1 追加）
+  for (const [n, r, vid, nSteps] of [['あんぱんB', R('anpan'), 'hand', 15], ['食パンC', R('shokupan-junnama'), 'hand-pan12', 14]]) {
+    const v = r.variants.find((x) => x.id === vid);
+    const h3 = C.findStep(v.steps, 'h3'), h5 = C.findStep(v.steps, 'h5');
+    const t3 = h3.tips || [], t5 = (h5.tips || []).join('\n');
+    ok(`${n}：一次こねのコツに「叩きごね」`, t3.some((t) => /叩きごね/.test(t)));
+    ok(`${n}：一次こねの打ち粉・カードのコツは1つだけ`, t3.filter((t) => /カード/.test(t)).length === 1 && t3.filter((t) => /打ち粉/.test(t)).length === 1 && new Set(t3).size === t3.length, t3.join(' / '));
+    ok(`${n}：本ごねの本文に「2〜3分休ませてよい」`, /2〜3分休ませてよい（休んだ時間はこね時間に含めない）。$/.test(h5.body));
+    ok(`${n}：本ごねのコツに「1〜2分休ませてから確かめる」「穴のふちがなめらか」`, /1〜2分休ませてから確かめる/.test(t5) && /穴のふちがなめらか/.test(t5));
+    ok(`${n}：タイマー（一次こね4〜6分・本ごね6〜12分）と工程数は変えない`, h3.timer.min === 4 && h3.timer.max === 6 && h5.timer.min === 6 && h5.timer.max === 12 && C.flattenSteps(v.steps).list.length === nSteps);
+  }
+  ok('クリームパン・チョコ包みパン：説明文に「叩きごね」（改訂番号は3のまま）', ['cream-pan', 'choco-pan'].every((id) => R(id).seedRev === 3 && R(id).variants[0].tips.some((t) => t === 'こねは叩きごね、途中で休ませてよい。膜は1〜2分休ませてから確かめる')));
   const vb = R('anpan').variants.find((x) => x.id === 'hand');
   const ab = C.computeAmounts(vb, C.scaleFor(vb, {}));
   const b1 = C.tpl(vb.steps[1].body, ab);
