@@ -34,7 +34,12 @@ function fmtClock(sec) {
   return h ? `${h}:${pad2(m)}:${pad2(s)}` : `${pad2(m)}:${pad2(s)}`;
 }
 const fmtMin = (m) => (m >= 120 && m % 60 === 0 ? `${m / 60}時間` : `${m}分`);
-const rangeMin = (a, b) => (b && b !== a ? `${a}〜${fmtMin(b)}` : fmtMin(a));
+// 単位がそろうときは「35〜45分」「2〜3時間」、違うときは両方に単位（「90分〜2時間」）
+const rangeMin = (a, b) => {
+  if (!b || b === a) return fmtMin(a);
+  const A = fmtMin(a), B = fmtMin(b), hA = A.endsWith('時間'), hB = B.endsWith('時間');
+  return hA === hB ? `${hA ? a / 60 : a}〜${B}` : `${A}〜${B}`;
+};
 const stars = (v) => (v == null ? '' : `★${v}`);
 
 function toast(msg) {
@@ -61,7 +66,7 @@ const ICON = {
   more: svg('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>'),
   sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6L19 19M5 19l1.4-1.4M17.6 6.4L19 5"/>'),
 };
-const CAT_EMOJI = { 食パン: '🍞', ハード系: '🥖', 高加水: '🥖', 惣菜パン: '🍛', 菓子パン: '🥐', ベーグル: '🥯', ピザ: '🍕', その他: '🥨' };
+const CAT_EMOJI = { 食パン: '🍞', ハード系: '🥖', 高加水: '🥖', 惣菜パン: '🍛', 菓子パン: '🥐', ペストリー: '🥐', ベーグル: '🥯', ピザ: '🍕', その他: '🥨' };
 
 /* ───────────────────────── state ───────────────────────── */
 const S = {
@@ -344,6 +349,8 @@ function vRecipe(id) {
   const hasColdV = C.hasCold(v.steps);
   const ferm = [];
   C.eachStep(v.steps, (s) => { if (s.type === 'branch') s.options.forEach((o) => ferm.push(o.label)); });
+  // 分岐のない冷蔵（クロワッサンの前日仕込みなど）は冷蔵時間を出す（空のバッジにしない）
+  if (!ferm.length) C.eachStep(v.steps, (s) => { if (s.cold) ferm.push(`❄ 冷蔵${s.cold.minH}〜${s.cold.maxH}時間`); });
 
   const yieldTxt = v.scaleMode === 'count'
     ? `${C.fmtCount(sc.count)}${v.countUnit || '個'}`
