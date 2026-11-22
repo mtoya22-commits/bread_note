@@ -161,6 +161,12 @@ const WINDOWPANE_TIPS = [
   '膜は、生地を1〜2分休ませてから確かめる。指先に少し油をつけ、中央から四方へゆっくり広げる',
   '破れても、穴のふちがなめらかなら膜はできている（ギザギザならこね不足）。国産小麦なので、指の影が透ける程度で十分',
 ];
+// 膜の状態を作るモードで記録する（v2.3.0）。次に作るとき、本ごねの「前回」に出る
+const MEMBRANE_CHECK = () => ({ label: '膜の状態', options: [
+  { v: 'ok', t: '指が透けた' },
+  { v: 'edge', t: '破れたが、ふちはなめらか' },
+  { v: 'ng', t: 'ギザギザに破れた' },
+] });
 const HAND_KNEAD_TIP = 'こねは叩きごね、途中で休ませてよい。膜は1〜2分休ませてから確かめる';
 const HAND_FLOW_TIP = '手ごねの場合は、菓子パン生地の手ごね手順（粉と水分を混ぜる→オートリーズ20分→塩・イースト（牛乳10gで溶かす）→一次こね→バター→本ごね→生地温26〜28℃）で';
 const GLAZE_TIPS = ['塗るのは必要量だけ。厚塗りしない', '（好みで）牛乳少量で薄めて漉すとムラになりにくい'];
@@ -462,7 +468,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── あんぱん（rev2：黒ごま標準・共通生地の部品化）
     recipe({
       id: 'anpan',
-      seedRev: 4, // rev3：NE-BS655（発酵機能35℃・予熱は庫内を空に）。rev4：B（手ごね）にオートリーズ
+      seedRev: 5, // rev3：NE-BS655（発酵機能35℃・予熱は庫内を空に）。rev4：B（手ごね）にオートリーズ。rev5：B の本ごねに膜の状態の記録
       name: '基本のあんぱん',
       category: '菓子パン',
       difficulty: 2,
@@ -498,7 +504,7 @@ export function buildSeedRecipes() {
             { id: 'h4', phase: 'dough', title: 'バターを加える', uses: ['butter'], body: '柔らかくした無塩バターを加え、そのままこね続ける。',
               tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
             { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。薄く伸ばすと指が透ける膜ができればOK。' + KNEAD_REST_SENTENCE,
-              timer: { min: 6, max: 12, label: '本ごね' }, tips: [...KNEAD_AFTER_AUTOLYSE_TIPS, ...WINDOWPANE_TIPS] },
+              timer: { min: 6, max: 12, label: '本ごね' }, tips: [...KNEAD_AFTER_AUTOLYSE_TIPS, ...WINDOWPANE_TIPS], check: MEMBRANE_CHECK() },
             { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳の温度を下げる'] },
             { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ入れ、ラップなしでグリル皿にのせて下段へ。手動「発酵」35℃（給水タンクは満水）。時間より膨らみを優先する。',
@@ -623,7 +629,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── 食パン（2 variants）
     recipe({
       id: 'shokupan-junnama',
-      seedRev: 7, // rev4：NE-BS655（200℃で焼く・発酵機能35℃）。rev5：D（湯種）を追加。rev6：E（こねない生食パン）を追加。rev7：C（手ごね）にオートリーズ
+      seedRev: 8, // rev4：NE-BS655（200℃で焼く・発酵機能35℃）。rev5：D（湯種）を追加。rev6：E（こねない生食パン）を追加。rev7：C（手ごね）にオートリーズ。rev8：C の生クリームを塩・イーストの工程へ・本ごねに膜の状態の記録
       name: 'ふわもち純生食パン',
       category: '食パン',
       difficulty: 2,
@@ -712,13 +718,13 @@ export function buildSeedRecipes() {
           ingredientGroups: PAN12_GROUPS(),
           steps: [
             { id: 'h1', phase: 'dough', title: '粉と水分を混ぜる',
-              uses: ['haru', 'kitano', 'sugar', { ref: 'milk', reservePct: 4, part: 'first' }, 'cream', 'honey', 'water'],
-              body: 'ボウルに粉2種と砂糖を入れる。別容器で牛乳{{rest:milk:4}}・生クリーム・はちみつ・水を混ぜて加え、ヘラやカードで粉気がなくなるまで混ぜる。牛乳{{reserve:milk:4}}は残しておく。塩・イースト・バターはまだ入れない。' },
+              uses: ['haru', 'kitano', 'sugar', { ref: 'milk', reservePct: 4, part: 'first' }, 'honey', 'water'],
+              body: 'ボウルに粉2種と砂糖を入れる。別容器で牛乳{{rest:milk:4}}・はちみつ・水を混ぜて加え、ヘラやカードで粉気がなくなるまで混ぜる。牛乳{{reserve:milk:4}}は残しておく。塩・イースト・バターはまだ入れない。' },
             { id: 'h2', phase: 'dough', title: 'オートリーズ', body: 'ラップをして休ませる。',
               timer: { min: 20, label: 'オートリーズ' }, tips: [AUTOLYSE_TIP] },
-            { id: 'h2y', phase: 'dough', title: '塩・イーストを加える', uses: ['salt', 'yeast', { ref: 'milk', reservePct: 4, part: 'reserve', label: '残しておいた牛乳' }],
-              body: '残しておいた牛乳{{reserve:milk:4}}を人肌に温め、ドライイーストを溶かして加える。塩をふって、全体にムラなく揉み込む。',
-              tips: [SALT_YEAST_TIP] },
+            { id: 'h2y', phase: 'dough', title: '塩・イーストを加える', uses: ['salt', 'yeast', { ref: 'milk', reservePct: 4, part: 'reserve', label: '残しておいた牛乳' }, 'cream'],
+              body: '残しておいた牛乳{{reserve:milk:4}}を人肌に温め、ドライイーストを溶かして生クリームと一緒に加える。塩をふって、全体にムラなく揉み込む。',
+              tips: [SALT_YEAST_TIP, '生クリームは油脂なので、オートリーズの後に入れる（グルテンがつながるのを邪魔しないため）'] },
             { id: 'h3', phase: 'dough', title: '一次こね', body: '台に出してこねる。生地がつながり、表面が少しなめらかになったら次へ。',
               timer: { min: 4, max: 6, label: '一次こね' },
               tips: SLAP_KNEAD_TIPS },
@@ -726,7 +732,7 @@ export function buildSeedRecipes() {
               body: '柔らかくした無塩バターを加え、そのままこね続ける。',
               tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
             { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。滑らかで弾力があり、薄く伸ばすと指が透ける膜ができればOK。完全に破れない極薄膜まで追い込む必要はない。' + KNEAD_REST_SENTENCE,
-              timer: { min: 6, max: 12, label: '本ごね' }, tips: [...KNEAD_AFTER_AUTOLYSE_TIPS, ...WINDOWPANE_TIPS] },
+              timer: { min: 6, max: 12, label: '本ごね' }, tips: [...KNEAD_AFTER_AUTOLYSE_TIPS, ...WINDOWPANE_TIPS], check: MEMBRANE_CHECK() },
             { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳などの液温を下げる'] },
             { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ入れ、ラップなしでグリル皿にのせて下段へ。手動「発酵」35℃（給水タンクは満水）。時間より膨らみを優先する。',

@@ -529,7 +529,7 @@ console.log('v1.5-1. 標準レシピの構造化データ');
   ok('新しい系統が DOUGH_FAMILIES にある', (() => { const f = DOUGH_FAMILIES; return f['lean-high-hydration'] && f['rich-shokupan'] && f['curry-bread-dough']; })());
   // v2.0.3 でカレーパンは内容の改訂（rev3）をしたので 3。V1.5 のメタデータ追加では上げていない
   // V1.5 のメタデータ追加では seedRev を上げていない。以降の内容改訂（v2.0.3 カレーパン、v2.1.0 NE-BS655 対応）で上がった値
-  ok('seedRev は内容の改訂でだけ上がる', R('curry-pan').seedRev === 4 && R('rodev-90').seedRev === 4 && R('shokupan-junnama').seedRev === 7 && R('anpan').seedRev === 4 && R('cream-pan').seedRev === 3 && R('choco-pan').seedRev === 3);
+  ok('seedRev は内容の改訂でだけ上がる', R('curry-pan').seedRev === 4 && R('rodev-90').seedRev === 4 && R('shokupan-junnama').seedRev === 8 && R('anpan').seedRev === 5 && R('cream-pan').seedRev === 3 && R('choco-pan').seedRev === 3);
 }
 
 console.log('v1.5-2. SEED_VERSION 6 → 7 の移行（メタデータだけ）');
@@ -1046,7 +1046,7 @@ console.log('v2.2.1. オートリーズ（あんぱんB・食パンC）');
     const v = r.variants.find((x) => x.id === vid);
     const refs = (s2) => (s2.uses || []).map((u) => (typeof u === 'string' ? u : u.ref));
     const [s1, s2a, s3, s4, s5, s6] = v.steps.filter((x) => x.phase === 'dough');
-    ok(`${n}：seedRev ${rev}・入力チェックを通る`, r.seedRev === rev && C.validateVariant(v).length === 0 && C.phaseComplete(v));
+    ok(`${n}：seedRev ${rev}以上・入力チェックを通る`, r.seedRev >= rev && C.validateVariant(v).length === 0 && C.phaseComplete(v));
     ok(`${n}：工程の順（粉と水分→オートリーズ→塩・イースト→一次こね→バター→本ごね）`, [s1, s2a, s3, s4, s5, s6].map((x) => x.title).join('/') === '粉と水分を混ぜる/オートリーズ/塩・イーストを加える/一次こね/バターを加える/本ごね');
     ok(`${n}：1の材料に塩・イースト・バターが入っていない`, !refs(s1).some((x) => ['salt', 'yeast', 'butter'].includes(x)) && refs(s1).includes('milk'));
     ok(`${n}：3の材料に塩・イースト・残しておく牛乳`, ['salt', 'yeast', 'milk'].every((x) => refs(s3).includes(x)) && s3.uses.some((u) => u.ref === 'milk' && u.part === 'reserve'));
@@ -1100,6 +1100,113 @@ console.log('v2.2.1. オートリーズ（あんぱんB・食パンC）');
   const p = C.planBatch([M('anpan', 'hand', 4), M('cream-pan', null, 4)], { leadIndex: 0 });
   const st = p.steps.find((x) => x.id === 'L:h2y');
   ok('まとめて作る：塩・イーストの工程に残す牛乳（粉200gで10g）', p.ok && st && /牛乳10g/.test(st.body) && st.uses.some((u) => u.ref === 'L:milk' && u.part === 'reserve'));
+}
+
+console.log('v2.3.0. 前回の記録・膜の状態・食パンCの生クリーム');
+{
+  const anB = R('anpan').variants.find((x) => x.id === 'hand');
+  const shC = R('shokupan-junnama').variants.find((x) => x.id === 'hand-pan12');
+  const refs = (st) => (st.uses || []).map((u) => (typeof u === 'string' ? u : u.ref));
+  // A. 食パンC：生クリームは塩・イーストの工程へ
+  const c1 = C.findStep(shC.steps, 'h1'), c2y = C.findStep(shC.steps, 'h2y');
+  ok('A：食パンC の h1 に生クリームがない（材料・本文とも）', !refs(c1).includes('cream') && !/生クリーム/.test(c1.body));
+  ok('A：食パンC の h2y に生クリーム（材料・本文・コツ）', refs(c2y).includes('cream') && /生クリームと一緒に加える/.test(c2y.body) && c2y.tips.some((t) => /生クリームは油脂なので、オートリーズの後に入れる/.test(t)));
+  ok('A：純生食パンの改訂番号 8・あんぱん 5', R('shokupan-junnama').seedRev === 8 && R('anpan').seedRev === 5);
+  const ac = C.computeAmounts(shC, C.scaleFor(shC, {}));
+  ok('A：塩・イーストの工程で生クリームの分量（22g）が引ける', ac.rows.cream.g === 22 && !/\{\{/.test(C.tpl(c2y.body, ac)));
+  ok('A：配合・タイマーは変えない（B と C は同じ配合、オートリーズ20分）', C.doughSignature(shC) === C.doughSignature(R('shokupan-junnama').variants[1]) && C.findStep(shC.steps, 'h2').timer.min === 20);
+  // B. 膜の状態
+  for (const [n, v] of [['あんぱんB', anB], ['食パンC', shC]]) {
+    const h5 = C.findStep(v.steps, 'h5');
+    ok(`B：${n} の本ごねに膜の状態（3択）・入力チェックを通る`, h5.check?.label === '膜の状態' && h5.check.options.map((o) => o.v).join() === 'ok,edge,ng' && C.validateVariant(v).length === 0);
+  }
+  const badCheck = (c) => { const v = clone(anB); C.findStep(v.steps, 'h5').check = c; return C.validateVariant(v).some((m) => /記録項目/.test(m)); };
+  ok('B：不正な check はエラー（選択肢が空・6件・label なし・v が数値・t が空）', badCheck({ label: '膜', options: [] }) && badCheck({ label: '膜', options: Array.from({ length: 6 }, (_, i) => ({ v: `v${i}`, t: `t${i}` })) })
+    && badCheck({ options: [{ v: 'a', t: 'A' }] }) && badCheck({ label: '膜', options: [{ v: 1, t: 'A' }] }) && badCheck({ label: '膜', options: [{ v: 'a', t: '' }] }) && badCheck('膜'));
+  ok('B：選択肢1件・5件は通る', !badCheck({ label: '膜', options: [{ v: 'a', t: 'A' }] }) && !badCheck({ label: '膜', options: Array.from({ length: 5 }, (_, i) => ({ v: `v${i}`, t: `t${i}` })) }));
+  // 記録の工程ログ
+  const T0 = Date.UTC(2026, 10, 20, 1, 0, 0), MIN = 60000;
+  const mkBake = (o = {}) => ({
+    id: o.id || 'b1', recipeId: 'anpan', status: o.status || 'done', startedAt: o.startedAt ?? T0, rating: o.rating ?? null, nextMemo: o.nextMemo ?? '', env: o.env || { room: '', water: '', dough: '' },
+    snapshot: { variantId: o.variantId || 'hand', recipeVersion: o.version ?? 3, variant: clone(o.variant || anB) }, progress: { choices: {}, log: o.log || {} }, ...(o.extra || {}),
+  });
+  const logRows = C.stepLogRows(mkBake({ log: { h5: { startedAt: T0, timerStart: T0, doneAt: T0 + 9 * MIN, check: { v: 'edge', at: T0 + 9 * MIN } }, h1: { startedAt: T0, doneAt: T0 + MIN } } }));
+  const r5 = logRows.find((x) => x.title === '本ごね');
+  ok('B：工程ログに「膜の状態：破れたが、ふちはなめらか」（時間も）', r5 && r5.check === '膜の状態：破れたが、ふちはなめらか' && r5.dur === 9 * MIN && !logRows.some((x) => x.title === '粉と水分を混ぜる'));
+  const onlyCheck = clone(anB); delete C.findStep(onlyCheck.steps, 'h5').timer;
+  const r5b = C.stepLogRows(mkBake({ variant: onlyCheck, log: { h5: { startedAt: T0, doneAt: T0 + MIN, check: { v: 'ok', at: T0 } } } })).find((x) => x.title === '本ごね');
+  ok('B：タイマーのない工程でも、膜を選べば工程ログに出る（時間は出さない）', r5b && r5b.check === '膜の状態：指が透けた' && !r5b.timed);
+  // まとめて作る：check は共通工程（L:h5）に引き継がれ、batch の進行記録に入る
+  const pb = C.planBatch([M('anpan', 'hand', 4), M('cream-pan', null, 4)], { leadIndex: 0 });
+  const bh5 = pb.steps.find((x) => x.id === 'L:h5');
+  ok('B：まとめて作る工程（L:h5）にも膜の状態が付く', pb.ok && bh5?.check?.options.length === 3);
+  const batchRun = { snapshot: { variant: { steps: pb.steps } }, progress: { choices: {}, log: { 'L:h5': { startedAt: T0, doneAt: T0 + 8 * MIN, check: { v: 'ok', at: T0 } } } } };
+  ok('B：batch の進行記録の工程ログに膜の状態', C.stepLogRows(batchRun).some((x) => x.check === '膜の状態：指が透けた'));
+  // レシピ編集の保存（edSave と同じ処理の流れ）で check が消えない
+  {
+    const ov = clone(anB), v = clone(anB);
+    C.findStep(v.steps, 'h1').title = '粉と水分を混ぜる（編集）';
+    C.findStep(v.steps, 'h5').timer.max = 14;   // 工程の条件を変える（同時製作用データが外れるケース）
+    const stripped = C.stripStaleMixMeta(ov, v);
+    C.reconcileIngKeys(ov, v, anB); C.markChangedPreps(ov, v, anB);
+    ok('B：レシピを編集して保存しても check が残る', stripped && C.validateVariant(v).length === 0 && JSON.stringify(C.findStep(v.steps, 'h5').check) === JSON.stringify(C.findStep(anB.steps, 'h5').check));
+  }
+  // C. 前回の記録
+  const done1 = mkBake({ id: 'd1', startedAt: T0 });
+  const done2 = mkBake({ id: 'd2', startedAt: T0 + 86400000 });
+  const aborted = mkBake({ id: 'ab', status: 'aborted', startedAt: T0 + 2 * 86400000 });
+  const active = mkBake({ id: 'ac', status: 'active', startedAt: T0 + 3 * 86400000 });
+  const otherV = mkBake({ id: 'ov', variantId: 'hb', startedAt: T0 + 4 * 86400000 });
+  const otherR = { ...mkBake({ id: 'or', startedAt: T0 + 5 * 86400000 }), recipeId: 'cream-pan' };
+  const all = [done1, aborted, done2, active, otherV, otherR];
+  ok('C：途中終了・製作中・別の種類・別のレシピを選ばず、一番新しい完了記録を選ぶ', C.previousBake(all, 'anpan', 'hand', ['ac'])?.id === 'd2');
+  ok('C：今作っている記録は除く', C.previousBake(all, 'anpan', 'hand', ['d2'])?.id === 'd1');
+  ok('C：前回がなければ null・何も出さない', C.previousBake([aborted, otherV], 'anpan', 'hand') === null && C.prevSummary(null) === null && C.prevStepInfo(C.findStep(anB.steps, 'h5'), C.previousStepLogs(null)) === null);
+  // 工程の対応づけ：あんぱんの h2 は旧「休ませる」・新「オートリーズ」で名前が違うので対応させない
+  const oldB = clone(anB); const oh2 = C.findStep(oldB.steps, 'h2'); oh2.title = '休ませる'; oh2.timer = { min: 5, max: 10, label: '水分をなじませる' };
+  const prevOld = C.previousStepLogs(mkBake({ variant: oldB, log: { h2: { startedAt: T0, doneAt: T0 + 7 * MIN }, h5: { startedAt: T0, doneAt: T0 + 9 * MIN } } }));
+  ok('C：工程番号が同じでも工程名が違えば対応させない（h2：休ませる → オートリーズ）', prevOld.has('h2') && C.prevStepInfo(C.findStep(anB.steps, 'h2'), prevOld) === null);
+  ok('C：工程番号・工程名が同じなら対応（本ごね 約9分）', C.prevStepLine(C.prevStepInfo(C.findStep(anB.steps, 'h5'), prevOld)) === '前回：約9分');
+  // かかった時間の丸めと、出さない場合
+  const h5 = C.findStep(anB.steps, 'h5');   // タイマー 6〜12分 → 上限の3倍 36分
+  const info = (ms, extra = {}) => C.prevStepInfo(h5, C.previousStepLogs(mkBake({ log: { h5: { startedAt: T0, doneAt: T0 + ms, ...extra } } })));
+  ok('C：丸め（9分29秒→約9分、9分30秒→約10分）', info(9 * MIN + 29000).mins === 9 && info(9 * MIN + 30000).mins === 10);
+  ok('C：1分未満は時間を出さない', info(59000) === null && info(60000).mins === 1);
+  ok('C：上限の3倍超は出さない（36分は出す・37分は出さない）', info(36 * MIN).mins === 36 && info(37 * MIN) === null);
+  ok('C：時間を出さなくても膜の状態は出す', C.prevStepLine(info(59000, { check: { v: 'edge' } })) === '前回：膜：破れたが、ふちはなめらか');
+  ok('C：表示「前回：約9分 · 膜：破れたが、ふちはなめらか」', C.prevStepLine(info(9 * MIN, { check: { v: 'edge' } })) === '前回：約9分 · 膜：破れたが、ふちはなめらか');
+  const long = clone(anB); C.findStep(long.steps, 'h5').timer = { min: 60, max: 90 };   // 3倍は270分 → 3時間で打ち切り
+  const lh5 = C.findStep(long.steps, 'h5');
+  const linfo = (ms) => C.prevStepInfo(lh5, C.previousStepLogs(mkBake({ variant: long, log: { h5: { startedAt: T0, doneAt: T0 + ms } } })));
+  ok('C：3時間超は出さない（180分は「約3時間」・181分は出さない）', C.prevStepLine(linfo(180 * MIN)) === '前回：約3時間' && linfo(181 * MIN) === null);
+  ok('C：単純な工程（タイマー・発酵・冷蔵・記録項目なし）には出さない', C.prevStepInfo(C.findStep(anB.steps, 'h1'), C.previousStepLogs(mkBake({ log: { h1: { startedAt: T0, doneAt: T0 + 5 * MIN } } }))) === null);
+  // 発酵の判定・冷蔵
+  const fer = C.findStep(anB.steps, 'h7');
+  const finfo = C.prevStepInfo(fer, C.previousStepLogs(mkBake({ log: { h7: { startedAt: T0, fermentStart: T0, doneAt: T0 + 50 * MIN, judgements: [{ v: 'early', at: T0 }, { v: 'good', at: T0 + 49 * MIN }] } } })));
+  ok('C：発酵は最後の判定（「ちょうどいい」）と時間', C.prevStepLine(finfo) === '前回：約50分 · 発酵：ちょうどいい');
+  const rd = R('rodev-90').variants[0];
+  const cs = C.findStep(rd.steps, 'cd-cold');
+  const rb = { id: 'r1', recipeId: 'rodev-90', status: 'done', startedAt: T0, snapshot: { variantId: 'std', recipeVersion: 1, variant: clone(rd) }, progress: { choices: { route: 'cold' }, log: { 'cd-cold': { startedAt: T0, coldStart: T0 + 30 * MIN, doneAt: T0 + 30 * MIN + 12 * 60 * MIN } } } };
+  ok('C：冷蔵は coldStart から（約12時間）・前回選んだ分岐で並べ直す', C.prevStepLine(C.prevStepInfo(cs, C.previousStepLogs(rb))) === '前回：約12時間' && !C.previousStepLogs({ ...rb, progress: { ...rb.progress, choices: { route: 'today' } } }).has('cd-cold'));
+  // 作り始めの「前回」カード
+  const sum = C.prevSummary(mkBake({ rating: 4, nextMemo: '  次回は牛乳＋5g\n本ごねは10分  ', env: { room: '22', water: '', dough: '27.5' }, version: 3 }), [], 3);
+  ok('C：カード：日付・評価・次回メモ全文・入力のある環境の値だけ', sum.rating === 4 && sum.nextMemo === '次回は牛乳＋5g\n本ごねは10分' && sum.envs.map((e) => `${e.k}${e.v}`).join() === '室温22,生地温27.5' && !sum.versionDiffers);
+  ok('C：前回の手順の版が違えば注記', C.prevSummary(mkBake({ version: 2 }), [], 3).versionDiffers === true && C.prevSummary(mkBake({ version: 2 }), [], 3).prevVersion === 2);
+  // まとめて作った前回：工程の記録は batch 側、次回メモと評価はそのパン自身から
+  {
+    const kidLead = mkBake({ id: 'k0', rating: 3, nextMemo: 'あんぱんのメモ', env: { room: '', water: '', dough: '' }, extra: { batchId: 'bx1' } });
+    kidLead.snapshot.mix = { leadRecipeId: 'anpan', leadVariantId: 'hand' };
+    const kidCream = { ...mkBake({ id: 'k1', nextMemo: 'クリームのメモ', extra: { batchId: 'bx1' } }), recipeId: 'cream-pan' };
+    kidCream.snapshot = { ...kidCream.snapshot, variantId: 'hb', variant: clone(R('cream-pan').variants[0]), mix: { leadRecipeId: 'anpan', leadVariantId: 'hand' } };
+    const bx = { id: 'bx1', kind: 'batch', env: { room: '21', water: '', dough: '27' }, snapshot: { allocation: [{ bakeId: 'k0' }, { bakeId: 'k1' }], variant: { steps: pb.steps } },
+      progress: { choices: {}, log: { 'L:h5': { startedAt: T0, doneAt: T0 + 8 * MIN, check: { v: 'ok', at: T0 } }, 'm1:cp-wrap': { startedAt: T0, doneAt: T0 + 3 * MIN } } } };
+    const pm = C.previousStepLogs(kidLead, [bx]);
+    ok('C：まとめて作った前回：生地の工程は batch 側から（本ごね 約8分・膜）', C.prevStepLine(C.prevStepInfo(h5, pm)) === '前回：約8分 · 膜：指が透けた');
+    ok('C：まとめて作った前回：環境は batch の共通の値、メモ・評価はそのパン自身', JSON.stringify(C.prevSummary(kidLead, [bx], 3).envs) === JSON.stringify([{ k: '室温', v: '21' }, { k: '生地温', v: '27' }]) && C.prevSummary(kidLead, [bx], 3).nextMemo === 'あんぱんのメモ' && C.prevSummary(kidLead, [bx], 3).rating === 3);
+    ok('C：生地の作り方が別のレシピだったパンには、共通の工程（L:）を対応させない', !C.previousStepLogs(kidCream, [bx]).has('h5'));
+    ok('C：今回まとめて作るときも、共通の工程（L:h5）に前回が出る', C.prevStepLine(C.prevStepInfo(bh5, pm)) === '前回：約8分 · 膜：指が透けた');
+    ok('C：batch が見つからなければ何も出さない', C.previousStepLogs(kidLead, []).size === 0);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
