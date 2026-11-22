@@ -10,6 +10,7 @@ export const DOUGH_FAMILIES = {
   'rich-shokupan': { name: 'リッチ食パン生地' },
   'curry-bread-dough': { name: 'カレーパン生地' },
   'french-soft': { name: 'フランスパン生地（外パリ中ふわ）' },
+  'laminated': { name: '折り込み生地（クロワッサン）' },
 };
 
 // オーブン：Panasonic ビストロ NE-BS655（取扱説明書より）
@@ -143,25 +144,6 @@ const SWEET_BAKE = (p, extraTips = []) => ({ id: `${p}-bake`, phase: 'bake', tit
   bake: { method: 'oven', preheat: 190, temp: 180, min: 12, max: 15, steam: false, vessel: 'tray' },
   ...(extraTips.length ? { tips: extraTips } : {}) });
 const SWEET_COOL = (p, body = '網にのせて冷ます。') => ({ id: `${p}-cool`, phase: 'after', title: '冷ます', body });
-// オートリーズ導入（v2.2.1）：手ごねの生地は「粉と水分 → オートリーズ20分 → 塩・イースト（残した牛乳10gで溶かす）」で始める
-const AUTOLYSE_TIP = 'オートリーズは発酵ではない。粉に水を吸わせて、グルテンがつながりやすくするための時間';
-const SALT_YEAST_TIP = '塩とイーストを加えた直後は生地がぬるっとする。1〜2分揉むと落ち着く';
-const KNEAD_AFTER_AUTOLYSE_TIPS = [
-  'オートリーズの分、こね時間が短くなることがある。時間ではなく、薄く伸ばして指が透ける膜で判断する',
-  '初回は、膜ができるまでの本ごねの時間を記録しておくと、前の手順と比べられる',
-];
-// 手ごねの膜づくり（v2.2.1）
-const SLAP_KNEAD_TIPS = [
-  '生地を持ち上げて台に叩きつけ、手前に伸ばして向こうへ折り返す（叩きごね）。押しつけるより少ない力でグルテンがつながる',
-  'べたついても打ち粉は足さず、カードで台から剥がしながら続ける',
-];
-const KNEAD_REST_SENTENCE = 'こねる途中で、5分ごとにラップをかけて2〜3分休ませてよい（休んだ時間はこね時間に含めない）。';
-const WINDOWPANE_TIPS = [
-  '膜は、生地を1〜2分休ませてから確かめる。指先に少し油をつけ、中央から四方へゆっくり広げる',
-  '破れても、穴のふちがなめらかなら膜はできている（ギザギザならこね不足）。国産小麦なので、指の影が透ける程度で十分',
-];
-const HAND_KNEAD_TIP = 'こねは叩きごね、途中で休ませてよい。膜は1〜2分休ませてから確かめる';
-const HAND_FLOW_TIP = '手ごねの場合は、菓子パン生地の手ごね手順（粉と水分を混ぜる→オートリーズ20分→塩・イースト（牛乳10gで溶かす）→一次こね→バター→本ごね→生地温26〜28℃）で';
 const GLAZE_TIPS = ['塗るのは必要量だけ。厚塗りしない', '（好みで）牛乳少量で薄めて漉すとムラになりにくい'];
 
 // あんぱん
@@ -461,7 +443,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── あんぱん（rev2：黒ごま標準・共通生地の部品化）
     recipe({
       id: 'anpan',
-      seedRev: 4, // rev3：NE-BS655（発酵機能35℃・予熱は庫内を空に）。rev4：B（手ごね）にオートリーズ
+      seedRev: 3, // rev3：NE-BS655（発酵機能35℃・予熱は庫内を空に）
       name: '基本のあんぱん',
       category: '菓子パン',
       difficulty: 2,
@@ -485,19 +467,16 @@ export function buildSeedRecipes() {
           ingredientGroups: ANPAN_GROUPS(),
           steps: [
             ANPAN_PREP('h0'),
-            { id: 'h1', phase: 'dough', title: '粉と水分を混ぜる', uses: ['haru', 'kitano', 'sugar', { ref: 'milk', reservePct: 5, part: 'first' }, 'egg'],
-              body: 'ボウルに粉2種と砂糖を入れ、牛乳{{rest:milk:5}}と溶き卵{{g:egg}}を加えて、粉気がなくなるまで混ぜる。牛乳{{reserve:milk:5}}は残しておく。塩・イースト・バターはまだ入れない。硬ければ牛乳を最大{{restmax:milk:5}}まで足す（残す{{reserve:milk:5}}とは別）。' },
-            { id: 'h2', phase: 'dough', title: 'オートリーズ', body: 'ラップをして休ませる。',
-              timer: { min: 20, label: 'オートリーズ' }, tips: [AUTOLYSE_TIP] },
-            { id: 'h2y', phase: 'dough', title: '塩・イーストを加える', uses: ['salt', 'yeast', { ref: 'milk', reservePct: 5, part: 'reserve', label: '残しておいた牛乳' }],
-              body: '残しておいた牛乳{{reserve:milk:5}}を人肌に温め、ドライイーストを溶かして加える。塩をふって、全体にムラなく揉み込む。',
-              tips: [SALT_YEAST_TIP] },
-            { id: 'h3', phase: 'dough', title: '一次こね', body: '台に出してこねる。生地がつながり、表面が少しなめらかになったら次へ。',
-              timer: { min: 4, max: 6, label: '一次こね' }, tips: SLAP_KNEAD_TIPS },
+            { id: 'h1', phase: 'dough', title: '材料を混ぜる', uses: ['haru', 'kitano', 'sugar', 'salt', 'yeast', { ref: 'milk', show: 'min' }, 'egg'],
+              body: 'ボウルに粉2種・砂糖・塩・ドライイーストを入れる（塩の上にイーストを置かない）。牛乳{{min:milk}}と溶き卵{{g:egg}}を加え、粉気がなくなるまで混ぜる。硬ければ牛乳を最大{{max:milk}}まで足す。バターはまだ入れない。' },
+            { id: 'h2', phase: 'dough', title: '休ませる', body: 'ラップをして休ませる。水分をなじませて手ごねを楽にするための時間。',
+              timer: { min: 5, max: 10, label: '水分をなじませる' } },
+            { id: 'h3', phase: 'dough', title: '一次こね', body: '台に出してこねる。生地がつながり、表面が少し滑らかになったら次へ。',
+              timer: { min: 5, max: 8, label: '一次こね' } },
             { id: 'h4', phase: 'dough', title: 'バターを加える', uses: ['butter'], body: '柔らかくした無塩バターを加え、そのままこね続ける。',
               tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
-            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。薄く伸ばすと指が透ける膜ができればOK。' + KNEAD_REST_SENTENCE,
-              timer: { min: 6, max: 12, label: '本ごね' }, tips: [...KNEAD_AFTER_AUTOLYSE_TIPS, ...WINDOWPANE_TIPS] },
+            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。薄く伸ばすと指が透ける膜ができればOK。',
+              timer: { min: 8, max: 15, label: '本ごね' } },
             { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳の温度を下げる'] },
             { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ入れ、ラップなしでグリル皿にのせて下段へ。手動「発酵」35℃（給水タンクは満水）。時間より膨らみを優先する。',
@@ -507,7 +486,6 @@ export function buildSeedRecipes() {
           ],
           tips: [
             '配合・焼成はAと同じ。違うのはこね方と一次発酵の環境',
-            '粉と水分だけでオートリーズ20分 → 塩・イースト（残した牛乳10gで溶かす）の順に混ぜる',
             'こね上がり生地温 26〜28℃が目安',
             '本ごねは時間より膜の状態を優先',
             ...ANPAN_TIPS,
@@ -519,7 +497,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── クリームパン
     recipe({
       id: 'cream-pan',
-      seedRev: 3, // rev2：NE-BS655。rev3：手ごね手順の説明文をオートリーズに合わせる（工程・配合は変えない）
+      seedRev: 2, // rev2：NE-BS655
       name: '基本のクリームパン',
       category: '菓子パン',
       difficulty: 3,
@@ -565,8 +543,7 @@ export function buildSeedRecipes() {
           'カスタード入りは当日中を基本に。残りは冷蔵保存',
           '余ったカスタードは冷蔵で翌日まで',
           '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
-          HAND_FLOW_TIP,
-          HAND_KNEAD_TIP,
+          '手ごねの場合は、菓子パン生地の手ごね手順（混合→休ませ→一次こね→バター→本ごね→生地温26〜28℃）で',
         ],
       }],
     }),
@@ -574,7 +551,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── チョコ包みパン
     recipe({
       id: 'choco-pan',
-      seedRev: 3, // rev2：NE-BS655。rev3：手ごね手順の説明文をオートリーズに合わせる（工程・配合は変えない）
+      seedRev: 2, // rev2：NE-BS655
       name: '基本のチョコ包みパン',
       category: '菓子パン',
       difficulty: 2,
@@ -613,8 +590,7 @@ export function buildSeedRecipes() {
           '焼きたては中のチョコが熱いので少し冷ましてから',
           'チョコチップを生地に練り込む方式にはしない（生地が変わるため）',
           '全卵1個を溶き、生地用に20g取り分け、残りを艶出しに使う',
-          HAND_FLOW_TIP,
-          HAND_KNEAD_TIP,
+          '手ごねの場合は、菓子パン生地の手ごね手順（混合→休ませ→一次こね→バター→本ごね→生地温26〜28℃）で',
         ],
       }],
     }),
@@ -622,7 +598,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── 食パン（2 variants）
     recipe({
       id: 'shokupan-junnama',
-      seedRev: 7, // rev4：NE-BS655（200℃で焼く・発酵機能35℃）。rev5：D（湯種）を追加。rev6：E（こねない生食パン）を追加。rev7：C（手ごね）にオートリーズ
+      seedRev: 6, // rev4：NE-BS655（200℃で焼く・発酵機能35℃）。rev5：D（湯種）を追加。rev6：E（こねない生食パン）を追加
       name: 'ふわもち純生食パン',
       category: '食パン',
       difficulty: 2,
@@ -710,22 +686,19 @@ export function buildSeedRecipes() {
           dough: { familyId: 'rich-shokupan' },
           ingredientGroups: PAN12_GROUPS(),
           steps: [
-            { id: 'h1', phase: 'dough', title: '粉と水分を混ぜる',
-              uses: ['haru', 'kitano', 'sugar', { ref: 'milk', reservePct: 4, part: 'first' }, 'cream', 'honey', 'water'],
-              body: 'ボウルに粉2種と砂糖を入れる。別容器で牛乳{{rest:milk:4}}・生クリーム・はちみつ・水を混ぜて加え、ヘラやカードで粉気がなくなるまで混ぜる。牛乳{{reserve:milk:4}}は残しておく。塩・イースト・バターはまだ入れない。' },
-            { id: 'h2', phase: 'dough', title: 'オートリーズ', body: 'ラップをして休ませる。',
-              timer: { min: 20, label: 'オートリーズ' }, tips: [AUTOLYSE_TIP] },
-            { id: 'h2y', phase: 'dough', title: '塩・イーストを加える', uses: ['salt', 'yeast', { ref: 'milk', reservePct: 4, part: 'reserve', label: '残しておいた牛乳' }],
-              body: '残しておいた牛乳{{reserve:milk:4}}を人肌に温め、ドライイーストを溶かして加える。塩をふって、全体にムラなく揉み込む。',
-              tips: [SALT_YEAST_TIP] },
-            { id: 'h3', phase: 'dough', title: '一次こね', body: '台に出してこねる。打ち粉は原則使わず、「押す・折る・転がす」を繰り返す。生地がつながり、表面が少しなめらかになったら次へ。',
-              timer: { min: 4, max: 6, label: '一次こね' },
-              tips: SLAP_KNEAD_TIPS },
+            { id: 'h1', phase: 'dough', title: '材料を混ぜる',
+              uses: ['haru', 'kitano', 'sugar', 'salt', 'yeast', 'milk', 'cream', 'honey', 'water'],
+              body: 'ボウルに粉2種・砂糖・塩・ドライイーストを入れる（塩の上にイーストを置かない）。別容器で牛乳・生クリーム・はちみつ・水を混ぜて加え、ヘラやカードで粉気がなくなるまで混ぜる。バターはまだ入れない。' },
+            { id: 'h2', phase: 'dough', title: '休ませる', body: 'ラップをして休ませる。発酵ではなく、水分をなじませて手ごねを楽にするための時間。',
+              timer: { min: 10, label: '水分をなじませる' } },
+            { id: 'h3', phase: 'dough', title: '一次こね', body: '台に出してこねる。打ち粉は原則使わず、「押す・折る・転がす」を繰り返す。生地がつながり、表面が少し滑らかになったら次へ。',
+              timer: { min: 5, max: 8, label: '一次こね' },
+              tips: ['べたつくうちはカードで台から剥がしながら続ける'] },
             { id: 'h4', phase: 'dough', title: 'バターを加える', uses: ['butter'],
               body: '柔らかくした無塩バターを加え、そのままこね続ける。',
               tips: ['バター投入直後に生地が一度バラバラになるのは正常'] },
-            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。滑らかで弾力があり、薄く伸ばすと指が透ける膜ができればOK。完全に破れない極薄膜まで追い込む必要はない。' + KNEAD_REST_SENTENCE,
-              timer: { min: 6, max: 12, label: '本ごね' }, tips: [...KNEAD_AFTER_AUTOLYSE_TIPS, ...WINDOWPANE_TIPS] },
+            { id: 'h5', phase: 'dough', title: '本ごね', body: '時間より生地の状態で判断する。滑らかで弾力があり、薄く伸ばすと指が透ける膜ができればOK。完全に破れない極薄膜まで追い込む必要はない。',
+              timer: { min: 8, max: 15, label: '本ごね' } },
             { id: 'h6', phase: 'dough', title: '生地温を確認', body: 'こね上がりの生地温は26〜28℃が目安。記録の「生地温」に残しておく。',
               tips: ['28℃を超えたときは発酵が速くなりやすい。時間より「約2倍」の状態を優先する', '次回は牛乳などの液温を下げる'] },
             { id: 'h7', phase: 'dough', title: '一次発酵', body: '丸めてボウルへ入れ、ラップなしでグリル皿にのせて下段へ。手動「発酵」35℃（給水タンクは満水）。時間より膨らみを優先する。',
@@ -742,7 +715,6 @@ export function buildSeedRecipes() {
           ],
           tips: [
             '配合・型・焼成はBと同じ。違うのはこね方と一次発酵の環境',
-            '粉と水分だけでオートリーズ20分 → 塩・イースト（残した牛乳10gで溶かす）の順に混ぜる',
             '基準は粉250g・総生地量 約500g（12cm角型＝1728cm³で型比容積 約3.45）',
             'こね上がり生地温 26〜28℃が目安（ロデヴの24〜26℃とは別）',
             '本ごねは時間より膜の状態を優先',
@@ -970,6 +942,95 @@ export function buildSeedRecipes() {
           tips: ['明太子は薄皮を除いて計量', '辛さは明太子の種類で調整', '一度目は淡く焼く（二度焼きで色が付く）', FR_STEAM_TIP, FR_OVEN_TIP],
         },
       ],
+    }),
+
+    // ───────────────────────────── サックリクロワッサン（v2.2.0）
+    // バリバリではなくサックリ：リスドォル100%・やや甘くリッチな生地・折込バター50%・3つ折り3回（27層）・200℃できつね色まで
+    recipe({
+      id: 'croissant',
+      seedRev: 1,
+      name: 'サックリクロワッサン',
+      category: 'ペストリー',
+      difficulty: 3,
+      tags: ['オーバーナイト', '前日仕込み'],
+      description: 'バリバリではなく、サクッと歯切れのよいクロワッサン。リスドォル100％・牛乳と砂糖でやや甘くリッチな生地に、折込バター50％を3つ折り3回。前日に生地を仕込み、当日に折り込みから焼成まで。',
+      variants: [{
+        id: 'std', name: '基本',
+        scaleMode: 'count', baseCount: 8, countUnit: '個', baseFlour: 250, yieldLabel: '8個分',
+        trayMax: 8,   // 焼くと横にも広がるので、グリル皿1枚に3・3・2で8個まで
+        hb: { mode: 'none', label: '手ごね', recommendation: 'not_recommended', model: '', course: '', notes: ['手ごね（約5分・膜は不要）'] },
+        bakeSummary: '210℃予熱 → 200℃ 15〜17分（下段）',
+        timeLabel: '前日 約20分＋当日 約4.5時間',
+        dough: { familyId: 'laminated' },
+        ingredientGroups: [
+          { id: 'flour', name: '粉', kind: 'flour', items: [I('lys', 'リスドォル', 250)] },
+          { id: 'dough', name: 'その他', kind: 'dough', items: [
+            I('sugar', '砂糖', 25, { ingKey: 'sugar' }),
+            I('salt', '塩', 5, { ingKey: 'salt', precision: 0.1 }),
+            I('yeast', 'ドライイースト', 5, { ingKey: 'yeast.dry', precision: 0.1 }),
+            I('milk', '牛乳（冷たいもの）', 100, { ingKey: 'milk', moisture: 0.88 }),
+            I('water', '水', { target: 40, max: 45 }, { moisture: 1, note: '生地が硬ければ最大＋5g' }),
+            I('butter', '無塩バター（生地用）', 20, { ingKey: 'butter.unsalted', note: '柔らかくしておく' }),
+          ] },
+          { id: 'rollin', name: '折込', kind: 'dough', items: [
+            I('rbutter', '無塩バター（折込用）', 125, { note: '粉の50%。冷えたものを使う' }),
+          ] },
+          { id: 'finish', name: '仕上げ', kind: 'finish', items: [
+            { id: 'eggwash', name: '溶き卵（ドリュール）', text: '適量（卵1個を溶いて使う）' },
+          ] },
+        ],
+        steps: [
+          { id: 'cr0', phase: 'prep', title: 'バターシートを作る（前日）', uses: ['rbutter'],
+            body: '折込用バター{{g:rbutter}}をオーブンシートで挟み、めん棒で叩いてから13×13cmの正方形にのばし（8個の場合）、冷蔵庫で冷やしておく。',
+            tips: ['シートを正方形に折ってから中でのばすと、角まできれいにそろう'] },
+          { id: 'cr1', phase: 'dough', title: '生地をこねる（前日）', uses: ['lys', 'sugar', 'salt', 'yeast', 'milk', 'water', 'butter'],
+            body: 'リスドォル・砂糖・塩・ドライイーストをボウルに入れ（塩の上にイーストを置かない）、冷たい牛乳と水{{min:water}}を加えて混ぜる。硬ければ水を最大{{max:water}}まで。まとまったら柔らかくしたバターを加え、約5分こねる。膜は作らなくてよく、表面が少しなめらかになればOK。',
+            tips: ['こねすぎると、のばすときに縮みやすくなる', 'こね上げの生地温は22〜24℃が目安。記録の「生地温」に残す'] },
+          { id: 'cr2', phase: 'dough', title: '室温で休ませる', body: 'ラップをして室温で休ませる。ここで膨らませすぎない。',
+            timer: { min: 30, label: '室温で休ませる' } },
+          { id: 'cr3', phase: 'dough', title: '冷蔵で一晩', body: '厚さ2cm・15×15cmほどの四角にのばしてラップで包み、冷蔵庫へ。',
+            cold: { minH: 8, maxH: 16 } },
+          { id: 'cr4', phase: 'dough', title: 'バターを包む',
+            body: 'バターシートを冷蔵庫から出して約10分置き、曲げても割れない硬さ（13〜15℃）にする。冷えた生地を15×28cmにのばし、中央にバターシートを置く。生地の両端を折ってバターを包み、合わせ目をしっかりつまんで閉じる。',
+            tips: ['生地とバターが同じくらいの硬さのときに作業する', 'バターが割れる → 冷たすぎ。少し置いてから', 'バターがはみ出す・べたつく → 柔らかすぎ。冷凍庫で10分'] },
+          { id: 'cr5', phase: 'dough', title: '3つ折り①', body: '合わせ目が縦になる向きで、15×45cmにのばして3つ折りにする。ラップをして冷凍庫で休ませる。',
+            timer: { min: 20, label: '冷凍庫で休ませる' },
+            tips: ['のばしている途中でバターが割れたり、はみ出したりしたら、すぐ冷凍庫で10分冷やす', '打ち粉は少なめ。折る前に刷毛で払う'] },
+          { id: 'cr6', phase: 'dough', title: '3つ折り②', body: '生地を90°回転させ、①と同じように15×45cmにのばして3つ折りにする。冷凍庫で休ませる。',
+            timer: { min: 20, label: '冷凍庫で休ませる' } },
+          { id: 'cr7', phase: 'dough', title: '3つ折り③', body: 'もう一度90°回転させ、同じように3つ折りにする。最後は冷蔵庫で長めに休ませる。',
+            timer: { min: 30, label: '冷蔵庫で休ませる' } },
+          { id: 'cr8', phase: 'divide', title: 'のばして切る',
+            body: '厚さ4mm・20×45cmにのばし（8個の場合）、底辺10cm×高さ20cmの細長い三角形を{{count}}枚切る。両端の半端な生地は合わせて巻くか、焼き菓子用にする。生地がだれたら冷蔵庫で10分冷やしてから次へ。',
+            tips: ['のばしてすぐ切ると縮むので、のばしたあと1〜2分置いてから切る', '包丁は押し切りにする（引くと層がつぶれる）'] },
+          { id: 'cr9', phase: 'shape', title: '成形',
+            body: '底辺の中央に1cmの切れ目を入れる。軽く引っ張って長さを出し、底辺側から巻く。巻き終わりを下にして、オーブンシートを敷いたグリル皿に3・3・2で並べる。',
+            tips: ['きつく巻かない（層が開きにくくなる）', '焼くと横にも広がるので、間隔は広めに'] },
+          { id: 'cr10', phase: 'proof', title: '最終発酵（室温）',
+            body: 'グリル皿ごと大きなポリ袋に入れて乾燥を防ぎ、室温（25℃前後・27℃以下）で発酵させる。ビストロの発酵35℃は使わない（バターが溶けて層がつぶれる）。',
+            ferment: { temp: '室温（27℃以下）', tempMode: 'ambient', cue: 'ひと回り大きくなり、揺らすとふるふるする・層の間が少し開く', min: 90, max: 120 },
+            tips: ['室温が低い日は時間を延ばし、状態を優先する', '発酵不足だと焼成中にバターが流れ出し、詰まった食感になる'] },
+          { id: 'cr11', phase: 'top', title: '予熱・ドリュール', uses: ['eggwash'],
+            body: 'グリル皿を庫外に出したまま、庫内を空にして210℃で予熱する（約14分）。その間に、溶き卵を表面に薄く塗る。切り口の層にはかけない。',
+            timer: { min: 14, label: '予熱 210℃' },
+            tips: ['層にかかると、そこだけ層が開かなくなる'] },
+          { id: 'cr12', phase: 'bake', title: '焼成',
+            body: '予熱完了後（210℃）、グリル皿を下段に入れ、温度変更で200℃にして焼く。きつね色になったら止める。10分の時点で焼きムラがあれば、グリル皿の向きを180°変える。',
+            timer: { min: 15, max: 17, label: '焼成 200℃' },
+            bake: { method: 'oven', preheat: 210, temp: 200, min: 15, max: 17, steam: false, vessel: 'tray' },
+            tips: ['濃く焼き込むとバリバリ寄りになり、薄すぎると層がしんなりする'] },
+          { id: 'cr13', phase: 'after', title: '冷ます', body: '網にのせて冷ます。冷めると層が締まり、サックリした食感になる。',
+            timer: { min: 20, label: '冷ます' } },
+        ],
+        tips: [
+          '基準は粉250g・8個（生地 約445g＋折込バター125g）',
+          '前日：生地とバターシート（約20分）／当日：折り込み〜焼成（約4.5時間）',
+          '倍量はのばす作業が家庭では難しいので、2回に分けて作る',
+          '個数を変えると材料は比例するが、のばす寸法（15×45cm・20×45cm）は8個の場合の目安',
+          '薄力粉があれば、リスドォル200g＋薄力粉50gにするとさらに軽くなる',
+          '食べ頃は焼いた当日。翌日はトースターで1〜2分温め直す',
+        ],
+      }],
     }),
   ];
 }
