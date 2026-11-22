@@ -2,7 +2,7 @@ import * as db from './db.js';
 import { buildSeedRecipes, SEED_VERSION, migrateRecipes, inferUserEdited, DOUGH_FAMILIES, applyStepMeta } from './seed.js';
 import * as C from './calc.js';
 
-export const APP_VERSION = '2.2.0';
+export const APP_VERSION = '2.2.1';
 
 /* ───────────────────────── utils ───────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
@@ -583,6 +583,10 @@ function useLine(u, amt) {
   const r = amt.rows[ref];
   if (!r) return '';
   if (typeof u === 'object' && u.pctOfFlour) return `${esc(u.label || r.name)} ${C.partG(r, u.pctOfFlour, amt.flour)}`;
+  if (typeof u === 'object' && u.reservePct && r.g != null) {
+    const sp = C.splitReserve(r, u.reservePct, amt.flour);
+    return `${esc(u.label || r.name)} ${C.fmtNum(u.part === 'reserve' ? sp.reserve : sp.first, r.precision)}g`;
+  }
   if (typeof u === 'object' && u.show === 'min' && r.min != null) return `${esc(r.name)} ${C.fmtNum(r.min, r.precision)}g`;
   return `${esc(r.name)} ${esc(C.fmtAmount(r))}`;
 }
@@ -781,6 +785,15 @@ function vMake(id) {
       if (!r) return '';
       if (typeof u === 'object' && u.pctOfFlour) {
         return `<div class="mk-ing"><span class="n">${esc(u.label || r.name)}</span><span class="g">${esc(C.partG(r, u.pctOfFlour, amt.flour))}</span><span class="sub">合計 ${esc(C.fmtAmount(r))} のうち</span></div>`;
+      }
+      if (typeof u === 'object' && u.reservePct && r.g != null) {
+        // 材料の一部を残しておく（例：オートリーズ後にイーストを溶かす牛乳）。最初の量＋残す量＝材料表の量
+        const sp = C.splitReserve(r, u.reservePct, amt.flour);
+        const isRes = u.part === 'reserve';
+        const g = `${C.fmtNum(isRes ? sp.reserve : sp.first, r.precision)}g`;
+        const sub = isRes ? `合計 ${C.fmtAmount(r)} のうち、残しておいた分`
+          : `合計 ${C.fmtAmount(r)} のうち ${C.fmtNum(sp.reserve, r.precision)}g は残しておく${sp.firstMax != null ? `（硬ければここで最大${C.fmtNum(sp.firstMax, r.precision)}gまで）` : ''}`;
+        return `<div class="mk-ing"><span class="n">${esc(u.label || r.name)}</span><span class="g">${esc(g)}</span><span class="sub">${esc(sub)}</span></div>`;
       }
       const minOnly = typeof u === 'object' && u.show === 'min' && r.min != null;
       const g = minOnly ? `${C.fmtNum(r.min, r.precision)}g` : C.fmtAmount(r);
