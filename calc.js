@@ -170,7 +170,7 @@ export function splitReserve(r, reservePct, flour) {
   return { reserve, first: sub(base), firstMax: r.max != null && r.max !== base ? sub(r.max) : null };
 }
 
-/** Step text templates: {{batch:group}} {{use:group}} {{part:id:pct}} {{rest:id:pct}} {{reserve:id:pct}} {{count}} {{divide}} {{piece}} {{per:id}} {{min:id}} {{max:id}} {{g:id}} */
+/** Step text templates: {{batch:group}} {{use:group}} {{part:id:pct}} {{rest:id:pct}} {{restmax:id:pct}} {{reserve:id:pct}} {{count}} {{divide}} {{piece}} {{per:id}} {{min:id}} {{max:id}} {{g:id}} */
 export function tpl(text, amt) {
   if (!text) return '';
   return text.replace(/\{\{(\w+)(?::([\w-]+))?(?::([\d.]+))?\}\}/g, (m, k, id, arg) => {
@@ -178,6 +178,12 @@ export function tpl(text, amt) {
     switch (k) {
       case 'part': return r && arg ? partG(r, +arg, amt.flour) : m;
       case 'rest': return r && arg && r.g != null ? fmtNum(splitReserve(r, +arg, amt.flour).first, r.precision) + 'g' : m;
+      case 'restmax': {
+        // 最初に入れる量の上限（材料表の上限 − 残す分）。上限がなければ最初の量
+        if (!r || !arg || r.g == null) return m;
+        const sp = splitReserve(r, +arg, amt.flour);
+        return fmtNum(sp.firstMax ?? sp.first, r.precision) + 'g';
+      }
       case 'reserve': return r && arg && r.g != null ? fmtNum(splitReserve(r, +arg, amt.flour).reserve, r.precision) + 'g' : m;
       case 'batch': { const g = (amt.groups || []).find((x) => x.id === id); return g?.prep ? batchLabel(g) : m; }
       case 'use': {

@@ -529,7 +529,7 @@ console.log('v1.5-1. 標準レシピの構造化データ');
   ok('新しい系統が DOUGH_FAMILIES にある', (() => { const f = DOUGH_FAMILIES; return f['lean-high-hydration'] && f['rich-shokupan'] && f['curry-bread-dough']; })());
   // v2.0.3 でカレーパンは内容の改訂（rev3）をしたので 3。V1.5 のメタデータ追加では上げていない
   // V1.5 のメタデータ追加では seedRev を上げていない。以降の内容改訂（v2.0.3 カレーパン、v2.1.0 NE-BS655 対応）で上がった値
-  ok('seedRev は内容の改訂でだけ上がる', R('curry-pan').seedRev === 4 && R('rodev-90').seedRev === 4 && R('shokupan-junnama').seedRev === 7 && R('anpan').seedRev === 4 && R('cream-pan').seedRev === 2 && R('choco-pan').seedRev === 2);
+  ok('seedRev は内容の改訂でだけ上がる', R('curry-pan').seedRev === 4 && R('rodev-90').seedRev === 4 && R('shokupan-junnama').seedRev === 7 && R('anpan').seedRev === 4 && R('cream-pan').seedRev === 3 && R('choco-pan').seedRev === 3);
 }
 
 console.log('v1.5-2. SEED_VERSION 6 → 7 の移行（メタデータだけ）');
@@ -1037,9 +1037,18 @@ console.log('v2.2.1. オートリーズ（あんぱんB・食パンC）');
   }
   const vb = R('anpan').variants.find((x) => x.id === 'hand');
   const ab = C.computeAmounts(vb, C.scaleFor(vb, {}));
-  ok('あんぱんB：牛乳110g＋10g・硬ければ合計最大130g', C.tpl(vb.steps[1].body, ab).includes('牛乳110g') && /合計最大130g/.test(C.tpl(vb.steps[1].body, ab)) && C.splitReserve(ab.rows.milk, 5, ab.flour).firstMax === 120);
+  const b1 = C.tpl(vb.steps[1].body, ab);
+  ok('あんぱんB：基準の分量で最初110g・上限120g・残す10g、1の本文に130が出ない', b1.includes('牛乳110g') && /最大120gまで足す（残す10gとは別）/.test(b1) && !/130/.test(b1), b1);
+  const ab2 = C.computeAmounts(vb, C.scaleFor(vb, { count: 16 }));
+  const sp2 = C.splitReserve(ab2.rows.milk, 5, ab2.flour), b2 = C.tpl(vb.steps[1].body, ab2);
+  ok('あんぱんB：倍量（16個）で最初220g・上限240g・残す20g', sp2.first === 220 && sp2.firstMax === 240 && sp2.reserve === 20 && /牛乳220g/.test(b2) && /最大240gまで足す（残す20gとは別）/.test(b2) && !/260/.test(b2), b2);
+  ok('食パンC：上限のない牛乳では restmax＝最初の量', (() => { const vc = R('shokupan-junnama').variants[2]; const a = C.computeAmounts(vc, C.scaleFor(vc, {})); return C.tpl('{{restmax:milk:4}}', a) === C.tpl('{{rest:milk:4}}', a); })());
   ok('配合は変えない（あんぱんA・B／食パンB・Cが同じ配合のまま）', C.doughSignature(vb) === C.doughSignature(R('anpan').variants[0]) && C.doughSignature(R('shokupan-junnama').variants[1]) === C.doughSignature(R('shokupan-junnama').variants[2]));
-  ok('クリームパン・チョコ包みパン：説明文だけ更新（seedRev 2 のまま）', ['cream-pan', 'choco-pan'].every((id) => R(id).seedRev === 2 && R(id).variants[0].tips.some((t) => /オートリーズ20分→塩・イースト（牛乳10gで溶かす）/.test(t))));
+  for (const id of ['cream-pan', 'choco-pan']) {
+    const r = R(id), tips = r.variants[0].tips.join('\n');
+    ok(`${r.name}：seedRev 3・説明文に「オートリーズ20分」があり「混合→休ませ」がない`, r.seedRev === 3 && /オートリーズ20分/.test(tips) && !/混合→休ませ/.test(tips));
+  }
+  ok('クリームパン・チョコ包みパン：工程・配合は変えない（甘い生地の4バリエーションで配合が一致）', sweet.every(([, v]) => C.doughSignature(v) === C.doughSignature(sweet[0][1])) && ['cream-pan', 'choco-pan'].every((id) => R(id).variants[0].steps.some((s2) => s2.hb)));
   // 標準版の更新：未編集なら自動、編集済みなら案内（seedRev が上がっていることが条件）
   const old = clone(R('anpan')); old.seedRev = 3;
   ok('旧 rev3 のあんぱんは標準版より古い（未編集なら自動更新の対象）', R('anpan').seedRev > old.seedRev);

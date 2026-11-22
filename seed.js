@@ -475,7 +475,7 @@ export function buildSeedRecipes() {
           steps: [
             ANPAN_PREP('h0'),
             { id: 'h1', phase: 'dough', title: '粉と水分を混ぜる', uses: ['haru', 'kitano', 'sugar', { ref: 'milk', reservePct: 5, part: 'first' }, 'egg'],
-              body: 'ボウルに粉2種と砂糖を入れ、牛乳{{rest:milk:5}}と溶き卵{{g:egg}}を加えて、粉気がなくなるまで混ぜる。牛乳{{reserve:milk:5}}は残しておく。塩・イースト・バターはまだ入れない。硬ければ牛乳を足してよい（残す分を含めて合計最大{{max:milk}}）。' },
+              body: 'ボウルに粉2種と砂糖を入れ、牛乳{{rest:milk:5}}と溶き卵{{g:egg}}を加えて、粉気がなくなるまで混ぜる。牛乳{{reserve:milk:5}}は残しておく。塩・イースト・バターはまだ入れない。硬ければ牛乳を最大{{restmax:milk:5}}まで足す（残す{{reserve:milk:5}}とは別）。' },
             { id: 'h2', phase: 'dough', title: 'オートリーズ', body: 'ラップをして休ませる。',
               timer: { min: 20, label: 'オートリーズ' }, tips: [AUTOLYSE_TIP] },
             { id: 'h2y', phase: 'dough', title: '塩・イーストを加える', uses: ['salt', 'yeast', { ref: 'milk', reservePct: 5, part: 'reserve', label: '残しておいた牛乳' }],
@@ -508,7 +508,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── クリームパン
     recipe({
       id: 'cream-pan',
-      seedRev: 2, // rev2：NE-BS655
+      seedRev: 3, // rev2：NE-BS655。rev3：手ごね手順の説明文をオートリーズに合わせる（工程・配合は変えない）
       name: '基本のクリームパン',
       category: '菓子パン',
       difficulty: 3,
@@ -562,7 +562,7 @@ export function buildSeedRecipes() {
     // ───────────────────────────── チョコ包みパン
     recipe({
       id: 'choco-pan',
-      seedRev: 2, // rev2：NE-BS655
+      seedRev: 3, // rev2：NE-BS655。rev3：手ごね手順の説明文をオートリーズに合わせる（工程・配合は変えない）
       name: '基本のチョコ包みパン',
       category: '菓子パン',
       difficulty: 2,
