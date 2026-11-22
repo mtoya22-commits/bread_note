@@ -529,7 +529,7 @@ console.log('v1.5-1. 標準レシピの構造化データ');
   ok('新しい系統が DOUGH_FAMILIES にある', (() => { const f = DOUGH_FAMILIES; return f['lean-high-hydration'] && f['rich-shokupan'] && f['curry-bread-dough']; })());
   // v2.0.3 でカレーパンは内容の改訂（rev3）をしたので 3。V1.5 のメタデータ追加では上げていない
   // V1.5 のメタデータ追加では seedRev を上げていない。以降の内容改訂（v2.0.3 カレーパン、v2.1.0 NE-BS655 対応）で上がった値
-  ok('seedRev は内容の改訂でだけ上がる', R('curry-pan').seedRev === 4 && R('rodev-90').seedRev === 4 && R('shokupan-junnama').seedRev === 6 && R('anpan').seedRev === 3 && R('cream-pan').seedRev === 2 && R('choco-pan').seedRev === 2);
+  ok('seedRev は内容の改訂でだけ上がる', R('curry-pan').seedRev === 4 && R('rodev-90').seedRev === 4 && R('shokupan-junnama').seedRev === 7 && R('anpan').seedRev === 4 && R('cream-pan').seedRev === 2 && R('choco-pan').seedRev === 2);
 }
 
 console.log('v1.5-2. SEED_VERSION 6 → 7 の移行（メタデータだけ）');
@@ -729,7 +729,7 @@ console.log('v2-1. planBatch：基本（あんぱんB・クリーム・チョコ
   ok('工程は区分の順（prep→dough→divide→shape→proof→top→bake→after）', ph.every((x, i) => i === 0 || x >= ph[i - 1]));
   const by = (phase) => p.steps.filter((s2) => s2.phase === phase);
   ok('prep はパン別（3つのパンの下準備）', by('prep').every((s2) => s2.member) && new Set(by('prep').map((s2) => s2.member.index)).size === 3);
-  ok('dough は生地の作り方（あんぱんB・手ごね）の工程だけ・共通', by('dough').every((s2) => !s2.member && s2.id.startsWith('L:h')) && by('dough').length === 7);
+  ok('dough は生地の作り方（あんぱんB・手ごね）の工程だけ・共通', by('dough').every((s2) => !s2.member && s2.id.startsWith('L:h')) && by('dough').length === 8);
   ok('divide は共通1つ・内訳つき', by('divide').length === 1 && by('divide')[0].allocation.length === 3 && /12分割/.test(by('divide')[0].body));
   ok('shape・top・after はパン別', ['shape', 'top', 'after'].every((k) => by(k).length === 3 && by(k).every((s2) => s2.member)));
   ok('proof・bake は共通1つ', by('proof').length === 1 && !by('proof')[0].member && by('bake').length === 1 && !by('bake')[0].member);
@@ -984,7 +984,7 @@ console.log('v2.1.2. 純生食パン E（こねない）');
 {
   const r = R('shokupan-junnama');
   const Ev = r.variants.find((v) => v.id === 'noknead-pan12');
-  ok('seedRev 6・5通り（E を追加）', r.seedRev === 6 && r.variants.map((v) => v.id).join() === 'hb-auto,hb-pan12,hand-pan12,yudane-pan12,noknead-pan12');
+  ok('seedRev 6以上・5通り（E を追加）', r.seedRev >= 6 && r.variants.map((v) => v.id).join() === 'hb-auto,hb-pan12,hand-pan12,yudane-pan12,noknead-pan12');
   ok('入力チェックを通り、工程データがそろう', Ev && C.validateVariant(Ev).length === 0 && C.phaseComplete(Ev));
   const a = C.computeAmounts(Ev, C.scaleFor(Ev, {}));
   ok('粉は B・C と同じ（春よ恋219g＋キタノカオリ31g＝87.5：12.5）', a.rows.haru.g === 219 && a.rows.kitano.g === 31 && C.computeAmounts(r.variants[1], C.scaleFor(r.variants[1], {})).rows.haru.g === 219);
@@ -1003,6 +1003,50 @@ console.log('v2.1.2. 純生食パン E（こねない）');
   ok('B・C と同じ系統・配合違い', C.compatVariants(r.variants[1], Ev).level === 'family');
   ok('本文のテンプレートが埋まり、使う材料はすべて材料にある', steps.every((x) => !/\{\{/.test(C.tpl(x.body, a)) && (x.uses || []).every((u) => a.rows[typeof u === 'string' ? u : u.ref])));
   ok('比較の注意（こね方だけの比較ではない）を tips に', Ev.tips.some((t) => /こね方だけの比較ではなく/.test(t)));
+}
+
+console.log('v2.2.1. オートリーズ（あんぱんB・食パンC）');
+{
+  const targets = [
+    ['あんぱんB', R('anpan'), 'hand', 4, 5],
+    ['食パンC', R('shokupan-junnama'), 'hand-pan12', 7, 4],
+  ];
+  for (const [n, r, vid, rev, pct] of targets) {
+    const v = r.variants.find((x) => x.id === vid);
+    const refs = (s2) => (s2.uses || []).map((u) => (typeof u === 'string' ? u : u.ref));
+    const [s1, s2a, s3, s4, s5, s6] = v.steps.filter((x) => x.phase === 'dough');
+    ok(`${n}：seedRev ${rev}・入力チェックを通る`, r.seedRev === rev && C.validateVariant(v).length === 0 && C.phaseComplete(v));
+    ok(`${n}：工程の順（粉と水分→オートリーズ→塩・イースト→一次こね→バター→本ごね）`, [s1, s2a, s3, s4, s5, s6].map((x) => x.title).join('/') === '粉と水分を混ぜる/オートリーズ/塩・イーストを加える/一次こね/バターを加える/本ごね');
+    ok(`${n}：1の材料に塩・イースト・バターが入っていない`, !refs(s1).some((x) => ['salt', 'yeast', 'butter'].includes(x)) && refs(s1).includes('milk'));
+    ok(`${n}：3の材料に塩・イースト・残しておく牛乳`, ['salt', 'yeast', 'milk'].every((x) => refs(s3).includes(x)) && s3.uses.some((u) => u.ref === 'milk' && u.part === 'reserve'));
+    ok(`${n}：オートリーズのタイマー20分`, s2a.timer.min === 20 && s2a.timer.max == null);
+    ok(`${n}：一次こね4〜6分・本ごね6〜12分`, s4.timer.min === 4 && s4.timer.max === 6 && s6.timer.min === 6 && s6.timer.max === 12);
+    ok(`${n}：コツ（発酵ではない／ぬるっと／膜で判断／記録）`, /発酵ではない/.test(s2a.tips.join()) && /ぬるっと/.test(s3.tips.join()) && /膜で判断/.test(s6.tips.join()) && /記録/.test(s6.tips.join()));
+    // 牛乳：最初の量＋残す量＝材料表の量（分量を変えても）
+    const inputs = v.scaleMode === 'count' ? [{}, { count: 6 }, { count: 7 }, { count: 13 }] : [{}, { pan: { w: 10, d: 10, h: 10 } }, { pan: { w: 19.5, d: 9.5, h: 9.5 } }];
+    const sums = inputs.map((inp) => {
+      const a = C.computeAmounts(v, C.scaleFor(v, inp));
+      const sp = C.splitReserve(a.rows.milk, pct, a.flour);
+      const tplOk = C.tpl(`{{rest:milk:${pct}}}+{{reserve:milk:${pct}}}`, a) === `${sp.first}g+${sp.reserve}g`;
+      return { ok: tplOk && sp.first + sp.reserve === (a.rows.milk.min ?? a.rows.milk.g), base: inp };
+    });
+    ok(`${n}：牛乳の「最初」＋「残す分」＝材料表の量（${inputs.length}通りの分量）`, sums.every((x) => x.ok), JSON.stringify(sums));
+    const a0 = C.computeAmounts(v, C.scaleFor(v, {}));
+    ok(`${n}：基準の分量で残す牛乳は10g`, C.splitReserve(a0.rows.milk, pct, a0.flour).reserve === 10);
+    ok(`${n}：本文のテンプレートが埋まり、使う材料はすべて材料にある`, v.steps.every((x) => !/\{\{/.test(C.tpl(x.body, a0)) && (x.uses || []).every((u) => a0.rows[typeof u === 'string' ? u : u.ref])));
+  }
+  const vb = R('anpan').variants.find((x) => x.id === 'hand');
+  const ab = C.computeAmounts(vb, C.scaleFor(vb, {}));
+  ok('あんぱんB：牛乳110g＋10g・硬ければ合計最大130g', C.tpl(vb.steps[1].body, ab).includes('牛乳110g') && /合計最大130g/.test(C.tpl(vb.steps[1].body, ab)) && C.splitReserve(ab.rows.milk, 5, ab.flour).firstMax === 120);
+  ok('配合は変えない（あんぱんA・B／食パンB・Cが同じ配合のまま）', C.doughSignature(vb) === C.doughSignature(R('anpan').variants[0]) && C.doughSignature(R('shokupan-junnama').variants[1]) === C.doughSignature(R('shokupan-junnama').variants[2]));
+  ok('クリームパン・チョコ包みパン：説明文だけ更新（seedRev 2 のまま）', ['cream-pan', 'choco-pan'].every((id) => R(id).seedRev === 2 && R(id).variants[0].tips.some((t) => /オートリーズ20分→塩・イースト（牛乳10gで溶かす）/.test(t))));
+  // 標準版の更新：未編集なら自動、編集済みなら案内（seedRev が上がっていることが条件）
+  const old = clone(R('anpan')); old.seedRev = 3;
+  ok('旧 rev3 のあんぱんは標準版より古い（未編集なら自動更新の対象）', R('anpan').seedRev > old.seedRev);
+  // まとめて作る：牛乳の分割が引き継がれる
+  const p = C.planBatch([M('anpan', 'hand', 4), M('cream-pan', null, 4)], { leadIndex: 0 });
+  const st = p.steps.find((x) => x.id === 'L:h2y');
+  ok('まとめて作る：塩・イーストの工程に残す牛乳（粉200gで10g）', p.ok && st && /牛乳10g/.test(st.body) && st.uses.some((u) => u.ref === 'L:milk' && u.part === 'reserve'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
